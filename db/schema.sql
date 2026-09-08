@@ -103,6 +103,23 @@ create table if not exists workspace_settings (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists agent_threads (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references projects(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(project_id)
+);
+
+create table if not exists agent_messages (
+  id uuid primary key default gen_random_uuid(),
+  thread_id uuid not null references agent_threads(id) on delete cascade,
+  role text not null,
+  content text not null,
+  metadata jsonb,
+  created_at timestamptz not null default now()
+);
+
 create table if not exists generation_jobs (
   id uuid primary key default gen_random_uuid(),
   generation_request_id uuid not null,
@@ -162,6 +179,7 @@ create table if not exists generation_outputs (
 create index if not exists idx_projects_workspace on projects(workspace_id);
 create index if not exists idx_scenes_project on scenes(project_id);
 create index if not exists idx_assets_project on assets(project_id);
+create index if not exists idx_agent_messages_thread on agent_messages(thread_id, created_at);
 create index if not exists idx_jobs_status on generation_jobs(status);
 create index if not exists idx_job_assets_job on generation_job_assets(generation_job_id);
 create index if not exists idx_attempts_job on generation_attempts(generation_job_id);
