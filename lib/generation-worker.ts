@@ -32,9 +32,8 @@ export const runVeoGeneration = inngest.createFunction(
       return { jobId, status: job.status, skipped: true };
     }
 
-    const resolved = await step.run("resolve-profile", async () => {
-      return resolveGoogleProfile(job.requested_api_profile_id);
-    });
+    // Resolve secrets directly in server memory. Never return API keys from a durable step.
+    const resolved = await resolveGoogleProfile(job.requested_api_profile_id);
 
     const attempt = await step.run("start-attempt", async () => {
       await updateGenerationStatus(jobId, "submitting");
