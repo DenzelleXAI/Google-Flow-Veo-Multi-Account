@@ -9,7 +9,23 @@ type PreflightCheck = { code: string; ok: boolean; message: string };
 type PreflightResponse = {
   ok?: boolean;
   checks?: PreflightCheck[];
-  usage?: { daily: number; dailyLimit: number; monthly: number; monthlyLimit: number };
+  usage?: {
+    daily: number;
+    dailyLimit: number;
+    monthly: number;
+    monthlyLimit: number;
+    dailyReservedUsd: number;
+    dailySpendLimitUsd: number;
+    monthlyReservedUsd: number;
+    monthlySpendLimitUsd: number;
+  };
+  cost?: {
+    estimatedRequestUsd: number;
+    perRequestLimitUsd: number;
+    projectedDailyUsd: number;
+    projectedMonthlyUsd: number;
+    pricingVersion: string;
+  } | null;
   error?: string;
 };
 
@@ -73,7 +89,7 @@ export default function SetupClient() {
           <div>
             <span className="eyebrow">Deployment</span>
             <h1>Live Test Readiness</h1>
-            <p>Validate infrastructure and generation constraints before spending Veo credits. These checks do not create a generation job.</p>
+            <p>Validate infrastructure, model settings, device capacity and spend limits before spending Veo credits. These checks do not create a generation job.</p>
           </div>
           <div className="settings-actions">
             <a className="ghost-button settings-link" href="/">← Workspace</a>
@@ -97,7 +113,7 @@ export default function SetupClient() {
         {health || preflight ? (
           <div className={`setup-banner ${ready ? "ready" : "blocked"}`}>
             <strong>{ready ? "Ready for a controlled live test" : "Not ready for a paid generation yet"}</strong>
-            <small>{ready ? "Infrastructure and current generation preflight passed." : "Resolve the failed checks below before clicking Generate."}</small>
+            <small>{ready ? "Infrastructure, spend limits and current generation preflight passed." : "Resolve the failed checks below before clicking Generate."}</small>
           </div>
         ) : null}
 
@@ -121,15 +137,25 @@ export default function SetupClient() {
                 <span className={`readiness-dot ${check.ok ? "ready" : "error"}`} />
                 <div><strong>{check.code.replaceAll("_", " ")}</strong><small>{check.message}</small></div>
               </div>
-            )) : <div className="profile-empty">Select a project and run checks to validate model, limits, target device and API profile.</div>}
-            {preflight?.usage ? <div className="setup-usage">Today {preflight.usage.daily}/{preflight.usage.dailyLimit} · Month {preflight.usage.monthly}/{preflight.usage.monthlyLimit}</div> : null}
+            )) : <div className="profile-empty">Select a project and run checks to validate model, limits, target device, cost and API profile.</div>}
+            {preflight?.cost ? (
+              <div className="setup-usage">
+                Estimated request ${preflight.cost.estimatedRequestUsd.toFixed(2)} / ${preflight.cost.perRequestLimitUsd.toFixed(2)} cap · projected day ${preflight.cost.projectedDailyUsd.toFixed(2)} · projected month ${preflight.cost.projectedMonthlyUsd.toFixed(2)}
+              </div>
+            ) : null}
+            {preflight?.usage ? (
+              <div className="setup-usage">
+                Jobs: today {preflight.usage.daily}/{preflight.usage.dailyLimit} · month {preflight.usage.monthly}/{preflight.usage.monthlyLimit}<br />
+                Reserved spend: today ${preflight.usage.dailyReservedUsd.toFixed(2)}/${preflight.usage.dailySpendLimitUsd.toFixed(2)} · month ${preflight.usage.monthlyReservedUsd.toFixed(2)}/${preflight.usage.monthlySpendLimitUsd.toFixed(2)}
+              </div>
+            ) : null}
           </section>
         </div>
 
         <section className="setup-card setup-runbook">
           <div className="setup-card-head"><strong>Controlled first live test</strong><small>Required order</small></div>
           <ol>
-            <li>Health and preflight must both pass.</li>
+            <li>Health and preflight must both pass, including the USD spend caps.</li>
             <li>Use one disposable/non-critical project and one explicit Generate click.</li>
             <li>Confirm QUEUED → SUBMITTING → PROVIDER_PENDING → CLOUD_READY.</li>
             <li>Start the desktop companion on the target PC.</li>
