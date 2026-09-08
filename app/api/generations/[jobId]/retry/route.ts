@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getGenerationJob, updateGenerationStatus } from "@/lib/generations";
 import { inngest } from "@/lib/inngest";
 
-const retryableStatuses = new Set(["failed_retryable", "queued"]);
+const retryableStatuses = new Set(["failed_retryable", "failed_ambiguous", "queued"]);
 
 export async function POST(
   _request: Request,
@@ -19,11 +19,16 @@ export async function POST(
 
     await updateGenerationStatus(jobId, "queued");
     await inngest.send({
-      name: "video/generation.requested",
+      name: "video/generation.submit",
       data: { jobId },
     });
 
-    return NextResponse.json({ job: { ...job, status: "queued" } });
+    return NextResponse.json({
+      job: { ...job, status: "queued" },
+      warning: job.status === "failed_ambiguous"
+        ? "Previous provider submission outcome was ambiguous. Retrying may create another billable generation."
+        : null,
+    });
   } catch (error) {
     console.error(error);
     return NextResponse.json({ error: "Failed to retry generation" }, { status: 500 });
