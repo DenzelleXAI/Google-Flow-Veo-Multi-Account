@@ -9,7 +9,14 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        {children}
+        <nav className="utility-nav" aria-label="Studio utility navigation">
+          <a href="/">Workspace</a>
+          <a href="/setup">Setup</a>
+          <a href="/profiles">Profiles</a>
+        </nav>
+      </body>
     </html>
   );
 }
