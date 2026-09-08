@@ -1,18 +1,20 @@
 {
   "name": "google-flow-veo-multi-account",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "db:bootstrap": "node scripts/db-bootstrap.mjs"
+    "db:bootstrap": "node scripts/db-bootstrap.mjs",
+    "companion": "node companion/index.mjs"
   },
   "dependencies": {
     "@ai-sdk/google": "4.0.64",
     "@aws-sdk/client-s3": "^3.1127.0",
     "@aws-sdk/lib-storage": "^3.1127.0",
+    "@aws-sdk/s3-request-presigner": "^3.1127.0",
     "@google/genai": "^2.21.0",
     "ai": "7.0.93",
     "inngest": "^4.20.0",
