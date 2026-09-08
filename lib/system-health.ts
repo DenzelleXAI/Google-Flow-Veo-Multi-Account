@@ -27,23 +27,30 @@ function configured(...names: string[]) {
   return names.every((name) => Boolean(process.env[name]?.trim()));
 }
 
+function hasEnvironmentGoogleCredential() {
+  return configured("GOOGLE_AUTH_KEY") || configured("GEMINI_API_KEY") || configured("GOOGLE_API_KEY");
+}
+
 function safeError(error: unknown) {
   if (error instanceof Error && error.message) return error.message.slice(0, 240);
   return "Health check failed.";
 }
 
 export async function getSystemHealth(deep = false): Promise<SystemHealth> {
+  const envGoogleConfigured = hasEnvironmentGoogleCredential();
+
   const checks: SystemHealth["checks"] = {
     database: {
       state: dbConfigured ? "unchecked" : "missing",
       detail: dbConfigured ? "DATABASE_URL is configured." : "DATABASE_URL is missing.",
     },
     google: {
-      state: configured("GOOGLE_AUTH_KEY") || configured("GEMINI_API_KEY") || configured("GOOGLE_API_KEY") ? "unchecked" : "missing",
-      detail:
-        configured("GOOGLE_AUTH_KEY") || configured("GEMINI_API_KEY") || configured("GOOGLE_API_KEY")
-          ? "A server-side Google credential is configured."
-          : "No server-side Google credential is configured.",
+      state: dbConfigured || envGoogleConfigured ? "unchecked" : "missing",
+      detail: envGoogleConfigured
+        ? "A server-side Google credential is configured."
+        : dbConfigured
+          ? "Google profile availability will be resolved from PostgreSQL."
+          : "No server-side Google credential or database profile can be resolved.",
     },
     r2: {
       state: configured("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET") ? "unchecked" : "missing",
@@ -61,13 +68,13 @@ export async function getSystemHealth(deep = false): Promise<SystemHealth> {
       state: configured("CREDENTIAL_ENCRYPTION_KEY") ? "ready" : "missing",
       detail: configured("CREDENTIAL_ENCRYPTION_KEY")
         ? "Encrypted multi-profile credential storage is configured."
-        : "CREDENTIAL_ENCRYPTION_KEY is missing.",
+        : "CREDENTIAL_ENCRYPTION_KEY is missing; environment-only profiles can still work.",
     },
     companion: {
       state: configured("COMPANION_TOKEN") ? "ready" : "missing",
       detail: configured("COMPANION_TOKEN")
         ? "Desktop companion authentication is configured."
-        : "COMPANION_TOKEN is missing.",
+        : "COMPANION_TOKEN is missing; cloud generation can still complete to R2.",
     },
   };
 
@@ -83,7 +90,7 @@ export async function getSystemHealth(deep = false): Promise<SystemHealth> {
     checks.database.state = "ready";
   }
 
-  if (deep && checks.google.state !== "missing" && checks.database.state === "ready") {
+  if (deep && checks.database.state === "ready") {
     try {
       const resolved = await resolveGoogleProfile(null);
       const ai = new GoogleGenAI({ apiKey: resolved.apiKey });
@@ -95,12 +102,14 @@ export async function getSystemHealth(deep = false): Promise<SystemHealth> {
       }
       checks.google = {
         state: "ready",
-        detail: model ? `Google credential accepted; model listing succeeded (${model}).` : "Google credential accepted.",
+        detail: model
+          ? `Google profile '${resolved.profile.name}' accepted; model listing succeeded (${model}).`
+          : `Google profile '${resolved.profile.name}' accepted.`,
       };
     } catch (error) {
       checks.google = { state: "error", detail: safeError(error) };
     }
-  } else if (checks.google.state !== "missing") {
+  } else if (!deep && envGoogleConfigured) {
     checks.google.state = "ready";
   }
 
