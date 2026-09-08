@@ -100,6 +100,9 @@ create table if not exists workspace_settings (
   default_target_device_id uuid references devices(id),
   daily_generation_limit integer not null default 10,
   monthly_generation_limit integer not null default 100,
+  daily_spend_limit_usd numeric(10,2) not null default 20.00,
+  monthly_spend_limit_usd numeric(10,2) not null default 100.00,
+  per_request_spend_limit_usd numeric(10,2) not null default 5.00,
   min_free_disk_bytes bigint not null default 32212254720,
   device_stale_after_seconds integer not null default 300,
   updated_at timestamptz not null default now()
@@ -107,17 +110,29 @@ create table if not exists workspace_settings (
 
 alter table workspace_settings add column if not exists daily_generation_limit integer;
 alter table workspace_settings add column if not exists monthly_generation_limit integer;
+alter table workspace_settings add column if not exists daily_spend_limit_usd numeric(10,2);
+alter table workspace_settings add column if not exists monthly_spend_limit_usd numeric(10,2);
+alter table workspace_settings add column if not exists per_request_spend_limit_usd numeric(10,2);
 alter table workspace_settings add column if not exists min_free_disk_bytes bigint;
 alter table workspace_settings add column if not exists device_stale_after_seconds integer;
 update workspace_settings
 set daily_generation_limit = coalesce(daily_generation_limit, 10),
     monthly_generation_limit = coalesce(monthly_generation_limit, 100),
+    daily_spend_limit_usd = coalesce(daily_spend_limit_usd, 20.00),
+    monthly_spend_limit_usd = coalesce(monthly_spend_limit_usd, 100.00),
+    per_request_spend_limit_usd = coalesce(per_request_spend_limit_usd, 5.00),
     min_free_disk_bytes = coalesce(min_free_disk_bytes, 32212254720),
     device_stale_after_seconds = coalesce(device_stale_after_seconds, 300);
 alter table workspace_settings alter column daily_generation_limit set default 10;
 alter table workspace_settings alter column daily_generation_limit set not null;
 alter table workspace_settings alter column monthly_generation_limit set default 100;
 alter table workspace_settings alter column monthly_generation_limit set not null;
+alter table workspace_settings alter column daily_spend_limit_usd set default 20.00;
+alter table workspace_settings alter column daily_spend_limit_usd set not null;
+alter table workspace_settings alter column monthly_spend_limit_usd set default 100.00;
+alter table workspace_settings alter column monthly_spend_limit_usd set not null;
+alter table workspace_settings alter column per_request_spend_limit_usd set default 5.00;
+alter table workspace_settings alter column per_request_spend_limit_usd set not null;
 alter table workspace_settings alter column min_free_disk_bytes set default 32212254720;
 alter table workspace_settings alter column min_free_disk_bytes set not null;
 alter table workspace_settings alter column device_stale_after_seconds set default 300;
@@ -175,6 +190,8 @@ create table if not exists generation_jobs (
   aspect_ratio_snapshot text not null default '9:16',
   duration_seconds_snapshot integer,
   resolution_snapshot text,
+  estimated_cost_usd numeric(10,4),
+  pricing_version text,
   status text not null default 'queued',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -185,6 +202,8 @@ alter table generation_jobs add column if not exists prompt_snapshot text not nu
 alter table generation_jobs add column if not exists aspect_ratio_snapshot text not null default '9:16';
 alter table generation_jobs add column if not exists duration_seconds_snapshot integer;
 alter table generation_jobs add column if not exists resolution_snapshot text;
+alter table generation_jobs add column if not exists estimated_cost_usd numeric(10,4);
+alter table generation_jobs add column if not exists pricing_version text;
 
 create table if not exists generation_job_assets (
   id uuid primary key default gen_random_uuid(),
@@ -225,6 +244,7 @@ create index if not exists idx_agent_messages_thread on agent_messages(thread_id
 create index if not exists idx_research_sessions_project on research_sessions(project_id, created_at desc);
 create index if not exists idx_research_sources_session on research_sources(research_session_id);
 create index if not exists idx_jobs_status on generation_jobs(status);
+create index if not exists idx_jobs_cost_window on generation_jobs(workspace_id, created_at, estimated_cost_usd);
 create index if not exists idx_job_assets_job on generation_job_assets(generation_job_id);
 create index if not exists idx_attempts_job on generation_attempts(generation_job_id);
 create index if not exists idx_attempts_started on generation_attempts(started_at);
