@@ -12,7 +12,40 @@ import {
 } from "./generations";
 import { resolveGoogleProfile } from "./provider-profiles";
 import { createVeoClient, downloadVeoVideo, pollVeoOperation, submitVeoGeneration } from "./providers/veo";
-import { uploadVideoToRelay } from "./r2";
+import { downloadRelayObject, uploadVideoToRelay } from "./r2";
+
+async function loadVeoInputAssets(job: any) {
+  const inputs = Array.isArray(job.inputs) ? job.inputs : [];
+
+  async function load(input: any) {
+    if (!input?.r2_key) {
+      throw new NonRetriableError(`Asset ${input?.asset_id ?? "unknown"} is not available in R2.`);
+    }
+    if (!input?.mime_type?.startsWith("image/")) {
+      throw new NonRetriableError(`Asset ${input.asset_id} is not a supported image.`);
+    }
+    return {
+      bytes: await downloadRelayObject(input.r2_key),
+      mimeType: input.mime_type,
+    };
+  }
+
+  const initial = inputs.find((item: any) => item.role === "initial_frame");
+  const last = inputs.find((item: any) => item.role === "last_frame");
+  const references = inputs
+    .filter((item: any) => item.role === "reference_asset")
+    .sort((a: any, b: any) => Number(a.sort_order) - Number(b.sort_order));
+
+  if (references.length > 3) {
+    throw new NonRetriableError("Veo supports at most three reference images.");
+  }
+
+  return {
+    initialFrame: initial ? await load(initial) : null,
+    lastFrame: last ? await load(last) : null,
+    referenceImages: await Promise.all(references.map(load)),
+  };
+}
 
 export const submitVeoGenerationJob = inngest.createFunction(
   {
@@ -33,8 +66,8 @@ export const submitVeoGenerationJob = inngest.createFunction(
       return { jobId, status: job.status, skipped: true };
     }
 
-    // Credential resolution stays in server memory and never becomes durable step output.
     const resolved = await resolveGoogleProfile(job.requested_api_profile_id);
+    const veoInputs = await loadVeoInputAssets(job);
 
     const attempt = await step.run("start-attempt", async () => {
       await updateGenerationStatus(jobId, "submitting");
@@ -50,6 +83,9 @@ export const submitVeoGenerationJob = inngest.createFunction(
           prompt: job.prompt_snapshot,
           aspectRatio: job.aspect_ratio_snapshot,
           resolution: job.resolution_snapshot,
+          initialFrame: veoInputs.initialFrame,
+          lastFrame: veoInputs.lastFrame,
+          referenceImages: veoInputs.referenceImages,
         });
 
         const name = submitted.operation?.name;
@@ -73,7 +109,6 @@ export const submitVeoGenerationJob = inngest.createFunction(
         completed: true,
       });
       await updateGenerationStatus(jobId, "failed_ambiguous");
-      // Never automatically retry a possibly accepted paid provider request.
       throw new NonRetriableError(`Veo submission outcome is ambiguous: ${message}`);
     }
 
