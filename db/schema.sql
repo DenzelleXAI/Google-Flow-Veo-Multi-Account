@@ -109,11 +109,21 @@ create table if not exists generation_jobs (
   requested_api_profile_id uuid references api_profiles(id),
   target_device_id uuid references devices(id),
   model_id text not null,
+  prompt_snapshot text not null default '',
+  aspect_ratio_snapshot text not null default '9:16',
+  duration_seconds_snapshot integer,
+  resolution_snapshot text,
   status text not null default 'queued',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique(workspace_id, generation_request_id)
 );
+
+-- Safe upgrades for databases bootstrapped before immutable generation snapshots existed.
+alter table generation_jobs add column if not exists prompt_snapshot text not null default '';
+alter table generation_jobs add column if not exists aspect_ratio_snapshot text not null default '9:16';
+alter table generation_jobs add column if not exists duration_seconds_snapshot integer;
+alter table generation_jobs add column if not exists resolution_snapshot text;
 
 create table if not exists generation_attempts (
   id uuid primary key default gen_random_uuid(),
