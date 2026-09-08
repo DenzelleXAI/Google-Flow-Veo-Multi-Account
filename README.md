@@ -4,32 +4,32 @@ Flow-inspired AI video workspace where project state belongs to the application,
 
 ## Core guarantee
 
-Changing API profiles must never reset projects, prompts, scenes, assets, agent history, research, generation jobs, or outputs.
+Changing API profiles must never reset projects, prompts, scenes, assets, agent history, generation jobs, or outputs.
 
-## Architecture
+## Current architecture
 
-- **Next.js UI/API** — project workspace, scenes, generation controls, and later agent UI.
-- **PostgreSQL** — source of truth for projects, prompts, devices, assets, profiles, jobs, attempts, and outputs.
-- **Inngest** — durable asynchronous execution for Veo submission, monitoring, and relay ingestion.
-- **Cloudflare R2** — transient safety relay for completed cloud generations while target devices may be offline.
-- **Desktop companion (planned)** — downloads R2 outputs to the local media folder and verifies SHA-256.
-- **Local media folder** — permanent master copy of images/videos per device.
-- **Optional OneDrive / Google Drive / Syncthing / NAS** — media replication between devices.
+- **Next.js UI/API** — projects, scenes, prompts, profile selection, safety controls, generation history, and persistent Agent UI.
+- **PostgreSQL** — source of truth for projects, prompts, devices, assets, profiles, agent history, jobs, attempts, outputs, and per-device media locations.
+- **Inngest** — durable Veo submission, provider polling, and relay ingestion.
+- **Cloudflare R2** — transient safety relay for inputs and completed generations while target PCs may be offline.
+- **Desktop companion** — heartbeats a device, downloads targeted R2 outputs, verifies SHA-256, and reports verified local copies.
+- **Local media folder** — intended permanent master media copy on each device.
+- **Optional OneDrive / Google Drive / Syncthing / NAS** — replication between local devices after the app has verified its own target copy.
 - **Gemini + Veo** — execution providers only; they never own project state.
 
 ## Media rule
 
-Media files are not stored inside PostgreSQL. The database stores metadata, hashes, R2 keys, and relative local paths.
+Media files are not stored inside PostgreSQL. PostgreSQL stores metadata, hashes, R2 keys, relative local paths, and per-device verification state.
 
-Cloud generation path:
+Generation path:
 
-`Generate -> immutable job snapshot -> Veo submit -> provider operation -> durable monitor -> R2 relay -> target device companion -> SHA-256 verification -> local confirmed`
+`Generate -> immutable job snapshot -> Veo -> durable monitor -> R2 -> companion -> SHA-256 verification -> LOCAL_CONFIRMED`
 
-R2 is a transient safety relay, not the permanent archive. Configure an object lifecycle rule after deployment.
+R2 is a transient relay, not the permanent archive. Configure an object lifecycle rule after deployment (for example 7–14 days) so cloud relay cost remains low while offline-device recovery remains possible.
 
-## Generation states
+## Generation lifecycle
 
-Primary cloud-side states currently implemented:
+Implemented cloud/device states include:
 
 1. `QUEUED`
 2. `SUBMITTING`
@@ -37,117 +37,142 @@ Primary cloud-side states currently implemented:
 4. `DOWNLOADING_FROM_PROVIDER`
 5. `UPLOADING_RELAY`
 6. `CLOUD_READY`
+7. `LOCAL_CONFIRMED`
 
 Failure states:
 
-- `FAILED_AMBIGUOUS` — provider may have accepted a paid request, but the operation ID was not safely confirmed. Never auto-resubmit this state.
-- `FAILED_RETRYABLE` — monitoring, relay, or dispatch can be deliberately retried.
+- `FAILED_AMBIGUOUS` — Veo may have accepted a paid request but the operation ID was not safely confirmed. Never auto-resubmit this state.
+- `FAILED_RETRYABLE`
 - `FAILED_FINAL`
 - `CANCELLED`
 
-Local-device delivery states will be added with the desktop companion.
-
 ## Paid-request safety
 
-### Idempotent user action
+### Idempotency
 
-One `generation_request_id` represents one logical Generate action and is reused across request retries. PostgreSQL enforces:
+One `generation_request_id` represents one logical Generate action. PostgreSQL enforces:
 
 `UNIQUE(workspace_id, generation_request_id)`
 
 ### Immutable generation inputs
 
-Each job snapshots the prompt, aspect ratio, duration, resolution, model, profile request, and target device at creation time. Editing a scene after clicking Generate cannot silently mutate an already queued job.
+A job freezes the prompt, aspect ratio, duration, resolution, model, selected API profile, target device, and image inputs at creation time.
+
+### Atomic generation caps
+
+`workspace_settings` is locked during job creation. The server checks daily/monthly limits before inserting the queued job, preventing simultaneous requests from racing through the cap.
+
+Defaults:
+
+- 10 generations/day
+- 100 generations/month
+- 30 GB minimum reserved free disk on a freshly reporting target device
+- 5-minute device freshness window
+
+These values are configurable through the workspace safety settings API/UI.
+
+### Device disk behavior
+
+A freshly reporting target device with less than the configured free-space reserve blocks generation before queueing.
+
+An offline/stale target device does **not** block generation because R2 remains the safe landing zone. The companion downloads it when the device returns online.
 
 ### Ambiguous provider submissions
 
-Veo submission and Veo monitoring are separate durable functions.
+Veo submission and Veo monitoring are separate durable functions. If the provider-acceptance outcome is uncertain, the job becomes `FAILED_AMBIGUOUS` instead of being automatically resubmitted.
 
-The submit function does not automatically resubmit an uncertain paid request. If network failure occurs around provider acceptance, the job becomes `FAILED_AMBIGUOUS` and requires a deliberate manual retry.
+## API profiles
 
-After a provider operation ID is safely stored, monitoring and R2 relay work can retry independently without creating a second Veo generation.
+Projects do not own provider profiles.
 
-## API profile rule
+Implemented profile behavior:
 
-Projects do not own API profiles. A generation records which profile it uses at execution time. V1 supports one server-side profile first, then Phase 3 adds manual multi-profile switching. Automatic quota rotation is explicitly out of scope.
+- Environment-backed Google profile
+- AES-256-GCM encrypted user-managed credentials
+- Add profile
+- Test profile
+- Enable/disable backend support
+- Manual default/profile selection
+- Selected profile ID frozen onto each generation job and attempt
 
-## Current Veo models
+Switching profile never changes project state.
 
-Capability validation is centralized for:
+## Veo inputs
 
-- `veo-3.1-generate-preview`
-- `veo-3.1-fast-generate-preview`
-- `veo-3.1-lite-generate-preview`
+Implemented generation inputs:
 
-The backend validates aspect ratio, duration, and resolution before creating a paid generation job.
+- Text-to-video
+- Initial-frame image-to-video
+- Last frame plumbing
+- Up to three reference assets where the selected Veo model supports them
+- PNG/JPEG/WebP upload to R2
+- Immutable asset IDs per generation
 
-## Development phases
+Model capability validation is centralized before queueing.
 
-### Phase 1 — Persistent workspace
+## Persistent Agent
 
-Implemented foundation:
+The right-side Agent is project-scoped and PostgreSQL-backed.
 
-- Project library and CRUD
-- Scene CRUD
-- Prompt versioning and autosave
-- Device registration/heartbeat API
-- Asset metadata API
-- Per-device asset verification metadata
-- PostgreSQL bootstrap schema
-- Flow-inspired UI
+Implemented Agent capabilities:
 
-### Phase 2 — Single-profile Veo integration
+- Persistent thread/message history
+- Uses the selected Google profile
+- Read project
+- List scenes
+- List assets
+- Create scene
+- Save prompt revision
+- Bounded tool loop
 
-Implemented foundation:
+The Agent cannot autonomously trigger paid Veo generation yet. Paid generation remains behind explicit user action until an approval/cost policy is added.
 
-- Environment-backed Google API profile
-- Current Google GenAI SDK adapter
-- Veo capability registry
-- Immutable generation snapshots
-- Idempotent generation jobs
-- Job / attempt / output records
-- Inngest durable submit + monitor functions
-- Provider operation persistence
-- R2 relay uploader
-- SHA-256 relay metadata
-- Live generation status polling in the UI
-- Manual retry API
-- Ambiguous-submission protection
+## Desktop companion
 
-Still required before a real end-to-end test:
+The first companion runs as a Node process and can later be wrapped in Tauri/Windows packaging.
 
-- Configure PostgreSQL
-- Configure a current Gemini auth key
-- Configure Inngest
-- Configure Cloudflare R2
-- Run the database bootstrap
-- Verify the production build in CI
-- Perform a real paid Veo generation test
-- Add reference-image/image-to-video transfer path
+It:
 
-### Phase 3 — Multiple API profiles
+1. Registers or heartbeats the device.
+2. Reports media root and current free disk.
+3. Receives only R2 outputs targeted to its device ID.
+4. Uses short-lived presigned R2 URLs.
+5. Streams each file to a `.part` file.
+6. Verifies SHA-256 against PostgreSQL metadata.
+7. Atomically renames the verified file into the media folder.
+8. Reports its verified relative path and hash.
+9. Advances the corresponding generation from `CLOUD_READY` to `LOCAL_CONFIRMED`.
 
-- Encrypted user-managed credentials
-- Add/test/disable profiles
-- Manual profile selector
+The device ID is persisted under the media root so restarting the companion does not create a new device record.
 
-### Phase 4 — Persistent agent
+### Companion configuration
 
-- Gemini chat
-- Project context loader
-- Controlled project tools
-- Agent history owned by PostgreSQL
+Set these values for the companion process:
 
-### Phase 5 — Web research
+```text
+COMPANION_APP_URL=http://localhost:3000
+COMPANION_TOKEN=<same secret as server>
+COMPANION_DEVICE_NAME=Home PC
+COMPANION_MEDIA_ROOT=D:\AI Video Studio
+```
 
-- Google Search
-- URL Context
-- Research persistence and citations
-- Prompt-injection restrictions
+Then run:
 
-## Environment
+```bash
+npm run companion
+```
 
-Copy `.env.example` and configure the required server-side values. Credentials must never be exposed to browser JavaScript.
+`COMPANION_DEVICE_ID` is optional; normally the companion stores its assigned ID itself.
+
+## Security boundaries
+
+- Google credentials are server-only.
+- User-managed Google keys are encrypted before database storage.
+- Credentials never enter Agent prompts/tool results.
+- Companion write/pending endpoints require `COMPANION_TOKEN`.
+- R2 companion downloads use short-lived signed URLs.
+- The server independently checks the companion-reported SHA-256 before accepting `verified` media state.
+- Automatic quota/account rotation is intentionally not implemented.
 
 ## Database bootstrap
 
@@ -166,4 +191,15 @@ Then open `http://localhost:3000`.
 
 ## Verification
 
-GitHub Actions runs install, TypeScript typecheck, and a production Next.js build on pushes to `main`.
+GitHub Actions runs dependency installation, TypeScript typecheck, and a production Next.js build on pushes to `main`.
+
+## Remaining major work
+
+- Complete profile disable/re-enable UI
+- Improve Agent tool-result rendering
+- Add monetary cost/spend accounting in addition to generation-count limits
+- Configure R2 lifecycle rules in deployed infrastructure
+- Package companion as a Windows/Tauri app and optionally auto-start it
+- Add Google Search + URL Context research persistence
+- Configure real PostgreSQL, Inngest, R2, Google credentials, and deployment secrets
+- Run the first controlled end-to-end paid Veo test
