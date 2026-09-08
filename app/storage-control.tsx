@@ -16,6 +16,9 @@ type Settings = {
   default_target_device_id: string | null;
   daily_generation_limit: number;
   monthly_generation_limit: number;
+  daily_spend_limit_usd: number;
+  monthly_spend_limit_usd: number;
+  per_request_spend_limit_usd: number;
   min_free_disk_bytes: number;
   device_stale_after_seconds: number;
 };
@@ -23,6 +26,10 @@ type Settings = {
 function formatGb(bytes?: number | null) {
   if (bytes === null || bytes === undefined) return "Unknown free space";
   return `${(Number(bytes) / 1024 ** 3).toFixed(1)} GB free`;
+}
+
+function money(value: number) {
+  return `$${Number(value).toFixed(2)}`;
 }
 
 export default function StorageControl({ enabled }: { enabled: boolean }) {
@@ -70,14 +77,31 @@ export default function StorageControl({ enabled }: { enabled: boolean }) {
     if (dailyRaw === null) return;
     const monthlyRaw = window.prompt("Monthly generation limit", String(settings.monthly_generation_limit));
     if (monthlyRaw === null) return;
+    const perRequestRaw = window.prompt("Maximum estimated Veo cost per request (USD)", String(settings.per_request_spend_limit_usd));
+    if (perRequestRaw === null) return;
+    const dailySpendRaw = window.prompt("Maximum reserved Veo spend per day (USD)", String(settings.daily_spend_limit_usd));
+    if (dailySpendRaw === null) return;
+    const monthlySpendRaw = window.prompt("Maximum reserved Veo spend per month (USD)", String(settings.monthly_spend_limit_usd));
+    if (monthlySpendRaw === null) return;
     const reserveRaw = window.prompt("Minimum free disk to reserve (GB)", String(Math.round(settings.min_free_disk_bytes / 1024 ** 3)));
     if (reserveRaw === null) return;
 
     const daily = Number(dailyRaw);
     const monthly = Number(monthlyRaw);
+    const perRequestSpend = Number(perRequestRaw);
+    const dailySpend = Number(dailySpendRaw);
+    const monthlySpend = Number(monthlySpendRaw);
     const reserveGb = Number(reserveRaw);
-    if (!Number.isInteger(daily) || daily < 1 || !Number.isInteger(monthly) || monthly < daily || !Number.isFinite(reserveGb) || reserveGb < 0) {
-      window.alert("Use valid limits. Monthly must be at least daily, and disk reserve cannot be negative.");
+
+    if (
+      !Number.isInteger(daily) || daily < 1 ||
+      !Number.isInteger(monthly) || monthly < daily ||
+      !Number.isFinite(perRequestSpend) || perRequestSpend <= 0 ||
+      !Number.isFinite(dailySpend) || dailySpend < perRequestSpend ||
+      !Number.isFinite(monthlySpend) || monthlySpend < dailySpend ||
+      !Number.isFinite(reserveGb) || reserveGb < 0
+    ) {
+      window.alert("Use valid limits. Monthly count must be at least daily; per-request spend <= daily spend <= monthly spend; disk reserve cannot be negative.");
       return;
     }
 
@@ -89,6 +113,9 @@ export default function StorageControl({ enabled }: { enabled: boolean }) {
         body: JSON.stringify({
           dailyGenerationLimit: daily,
           monthlyGenerationLimit: monthly,
+          perRequestSpendLimitUsd: perRequestSpend,
+          dailySpendLimitUsd: dailySpend,
+          monthlySpendLimitUsd: monthlySpend,
           minFreeDiskBytes: Math.round(reserveGb * 1024 ** 3),
         }),
       });
@@ -114,7 +141,11 @@ export default function StorageControl({ enabled }: { enabled: boolean }) {
         </select>
       ) : <small>No desktop companion/device registered yet.</small>}
       {selected && <div className="device-summary"><strong>{selected.status}</strong><span>{formatGb(selected.free_disk_bytes)}</span><span>{selected.media_root || "Media root not reported"}</span></div>}
-      {settings && <small>{settings.daily_generation_limit}/day · {settings.monthly_generation_limit}/month · reserve {Math.round(settings.min_free_disk_bytes / 1024 ** 3)} GB</small>}
+      {settings && (
+        <small>
+          {settings.daily_generation_limit}/day · {settings.monthly_generation_limit}/month · {money(settings.per_request_spend_limit_usd)}/request · {money(settings.daily_spend_limit_usd)}/day · {money(settings.monthly_spend_limit_usd)}/month · reserve {Math.round(settings.min_free_disk_bytes / 1024 ** 3)} GB
+        </small>
+      )}
       <button className="tiny-button storage-settings-button" onClick={() => void editLimits()} disabled={!settings || state === "saving"}>Safety settings</button>
     </div>
   );
