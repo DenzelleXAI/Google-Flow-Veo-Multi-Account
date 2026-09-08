@@ -2,6 +2,7 @@ import { requireDb } from "./db";
 import { ensurePersonalWorkspace } from "./workspace";
 import { resolveGoogleProfile } from "./provider-profiles";
 import { validateVeoSettings } from "./model-registry";
+import { estimateVeoCostUsd } from "./veo-pricing";
 
 export type GenerationPreflightResult = {
   ok: boolean;
@@ -17,7 +18,18 @@ export type GenerationPreflightResult = {
     dailyLimit: number;
     monthly: number;
     monthlyLimit: number;
+    dailyReservedUsd: number;
+    dailySpendLimitUsd: number;
+    monthlyReservedUsd: number;
+    monthlySpendLimitUsd: number;
   };
+  cost: {
+    estimatedRequestUsd: number;
+    perRequestLimitUsd: number;
+    projectedDailyUsd: number;
+    projectedMonthlyUsd: number;
+    pricingVersion: string;
+  } | null;
 };
 
 export async function runGenerationPreflight(input: {
@@ -64,6 +76,7 @@ export async function runGenerationPreflight(input: {
 
   const settingsRows = await sql`
     select default_target_device_id, daily_generation_limit, monthly_generation_limit,
+           daily_spend_limit_usd, monthly_spend_limit_usd, per_request_spend_limit_usd,
            min_free_disk_bytes, device_stale_after_seconds
     from workspace_settings
     where workspace_id = ${workspace.id}
@@ -80,7 +93,15 @@ export async function runGenerationPreflight(input: {
       count(*) filter (
         where created_at >= date_trunc('month', now())
           and status not in ('cancelled', 'failed_final')
-      )::int as monthly_count
+      )::int as monthly_count,
+      coalesce(sum(estimated_cost_usd) filter (
+        where created_at >= date_trunc('day', now())
+          and status not in ('cancelled', 'failed_final')
+      ), 0)::numeric as daily_reserved_usd,
+      coalesce(sum(estimated_cost_usd) filter (
+        where created_at >= date_trunc('month', now())
+          and status not in ('cancelled', 'failed_final')
+      ), 0)::numeric as monthly_reserved_usd
     from generation_jobs
     where workspace_id = ${workspace.id}
   `;
@@ -90,6 +111,10 @@ export async function runGenerationPreflight(input: {
     dailyLimit: Number(settings.daily_generation_limit),
     monthly: Number(usageRow.monthly_count),
     monthlyLimit: Number(settings.monthly_generation_limit),
+    dailyReservedUsd: Number(usageRow.daily_reserved_usd),
+    dailySpendLimitUsd: Number(settings.daily_spend_limit_usd),
+    monthlyReservedUsd: Number(usageRow.monthly_reserved_usd),
+    monthlySpendLimitUsd: Number(settings.monthly_spend_limit_usd),
   };
 
   checks.push({
@@ -102,6 +127,49 @@ export async function runGenerationPreflight(input: {
     ok: usage.monthly < usage.monthlyLimit,
     message: `${usage.monthly}/${usage.monthlyLimit} generation jobs used this month.`,
   });
+
+  let cost: GenerationPreflightResult["cost"] = null;
+  try {
+    const pricing = estimateVeoCostUsd({
+      modelId: input.modelId,
+      resolution: input.resolution,
+      durationSeconds: input.durationSeconds,
+    });
+    const estimatedRequestUsd = pricing.estimatedCostUsd;
+    const perRequestLimitUsd = Number(settings.per_request_spend_limit_usd);
+    const projectedDailyUsd = usage.dailyReservedUsd + estimatedRequestUsd;
+    const projectedMonthlyUsd = usage.monthlyReservedUsd + estimatedRequestUsd;
+
+    cost = {
+      estimatedRequestUsd,
+      perRequestLimitUsd,
+      projectedDailyUsd,
+      projectedMonthlyUsd,
+      pricingVersion: pricing.pricingVersion,
+    };
+
+    checks.push({
+      code: "PER_REQUEST_SPEND",
+      ok: estimatedRequestUsd <= perRequestLimitUsd,
+      message: `Estimated $${estimatedRequestUsd.toFixed(2)} for this request; per-request cap is $${perRequestLimitUsd.toFixed(2)}.`,
+    });
+    checks.push({
+      code: "DAILY_SPEND",
+      ok: projectedDailyUsd <= usage.dailySpendLimitUsd,
+      message: `Projected daily reserved spend $${projectedDailyUsd.toFixed(2)} / $${usage.dailySpendLimitUsd.toFixed(2)}.`,
+    });
+    checks.push({
+      code: "MONTHLY_SPEND",
+      ok: projectedMonthlyUsd <= usage.monthlySpendLimitUsd,
+      message: `Projected monthly reserved spend $${projectedMonthlyUsd.toFixed(2)} / $${usage.monthlySpendLimitUsd.toFixed(2)}.`,
+    });
+  } catch (error) {
+    checks.push({
+      code: "COST_ESTIMATE",
+      ok: false,
+      message: error instanceof Error ? error.message : "Unable to estimate Veo cost.",
+    });
+  }
 
   const effectiveTargetDeviceId = input.targetDeviceId ?? settings.default_target_device_id ?? null;
   if (effectiveTargetDeviceId) {
@@ -172,5 +240,6 @@ export async function runGenerationPreflight(input: {
     effectiveTargetDeviceId,
     effectiveApiProfileId,
     usage,
+    cost,
   };
 }
