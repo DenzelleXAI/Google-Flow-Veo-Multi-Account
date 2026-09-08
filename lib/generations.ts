@@ -13,6 +13,12 @@ export type GenerationStatus =
   | "failed_final"
   | "cancelled";
 
+export type GenerationAssetInput = {
+  assetId: string;
+  role: "initial_frame" | "last_frame" | "reference_asset";
+  sortOrder?: number;
+};
+
 export async function createGenerationJob(input: {
   generationRequestId: string;
   projectId: string;
@@ -24,6 +30,7 @@ export async function createGenerationJob(input: {
   aspectRatioSnapshot?: string | null;
   durationSecondsSnapshot?: number | null;
   resolutionSnapshot?: string | null;
+  assetInputs?: GenerationAssetInput[];
 }) {
   const sql = requireDb();
   const workspace = await ensurePersonalWorkspace();
@@ -54,6 +61,15 @@ export async function createGenerationJob(input: {
       returning *
     `;
 
+    for (const item of input.assetInputs ?? []) {
+      await tx`
+        insert into generation_job_assets (generation_job_id, asset_id, role, sort_order)
+        select ${rows[0].id}, a.id, ${item.role}, ${item.sortOrder ?? 0}
+        from assets a
+        where a.id = ${item.assetId} and a.project_id = ${input.projectId}
+      `;
+    }
+
     return { job: rows[0], created: true };
   });
 }
@@ -83,7 +99,15 @@ export async function getGenerationJob(jobId: string) {
     where go.generation_job_id = ${jobId}
     order by go.created_at asc
   `;
-  return { ...rows[0], attempts, outputs };
+  const inputs = await sql`
+    select gja.asset_id, gja.role, gja.sort_order,
+      a.filename, a.mime_type, a.r2_key, a.sha256, a.file_size_bytes
+    from generation_job_assets gja
+    join assets a on a.id = gja.asset_id
+    where gja.generation_job_id = ${jobId}
+    order by gja.role asc, gja.sort_order asc
+  `;
+  return { ...rows[0], attempts, outputs, inputs };
 }
 
 export async function listRecentGenerationJobs(projectId?: string | null) {
@@ -158,8 +182,8 @@ export async function saveRelayOutput(input: {
   const sql = requireDb();
   return sql.begin(async (tx) => {
     const assets = await tx`
-      insert into assets (project_id, type, filename, r2_key, sha256, file_size_bytes)
-      values (${input.projectId}, 'GENERATED_VIDEO', ${input.filename}, ${input.r2Key}, ${input.sha256}, ${input.fileSizeBytes})
+      insert into assets (project_id, type, filename, mime_type, r2_key, sha256, file_size_bytes)
+      values (${input.projectId}, 'GENERATED_VIDEO', ${input.filename}, 'video/mp4', ${input.r2Key}, ${input.sha256}, ${input.fileSizeBytes})
       returning *
     `;
     await tx`
