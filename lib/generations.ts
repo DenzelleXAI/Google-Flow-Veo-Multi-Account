@@ -19,6 +19,16 @@ export type GenerationAssetInput = {
   sortOrder?: number;
 };
 
+export class GenerationSafetyError extends Error {
+  constructor(
+    public readonly code: "DAILY_LIMIT" | "MONTHLY_LIMIT" | "LOW_DISK" | "INVALID_DEVICE" | "INVALID_PROJECT",
+    message: string,
+  ) {
+    super(message);
+    this.name = "GenerationSafetyError";
+  }
+}
+
 export type GenerationJobRecord = {
   id: string;
   generation_request_id: string;
@@ -110,6 +120,87 @@ export async function createGenerationJob(input: {
       return { job: existing[0] as unknown as GenerationJobRecord, created: false };
     }
 
+    const projects = await tx`
+      select id from projects
+      where id = ${input.projectId} and workspace_id = ${workspace.id}
+      limit 1
+    `;
+    if (!projects[0]) {
+      throw new GenerationSafetyError("INVALID_PROJECT", "Project does not belong to this workspace.");
+    }
+
+    await tx`
+      insert into workspace_settings (workspace_id)
+      values (${workspace.id})
+      on conflict (workspace_id) do nothing
+    `;
+
+    const settingsRows = await tx`
+      select workspace_id, default_target_device_id, daily_generation_limit,
+             monthly_generation_limit, min_free_disk_bytes, device_stale_after_seconds
+      from workspace_settings
+      where workspace_id = ${workspace.id}
+      for update
+    `;
+    const settings = settingsRows[0];
+
+    const usageRows = await tx`
+      select
+        count(*) filter (
+          where created_at >= date_trunc('day', now())
+            and status not in ('cancelled', 'failed_final')
+        )::int as daily_count,
+        count(*) filter (
+          where created_at >= date_trunc('month', now())
+            and status not in ('cancelled', 'failed_final')
+        )::int as monthly_count
+      from generation_jobs
+      where workspace_id = ${workspace.id}
+    `;
+    const usage = usageRows[0];
+
+    if (Number(usage.daily_count) >= Number(settings.daily_generation_limit)) {
+      throw new GenerationSafetyError(
+        "DAILY_LIMIT",
+        `Daily generation limit reached (${settings.daily_generation_limit}).`,
+      );
+    }
+    if (Number(usage.monthly_count) >= Number(settings.monthly_generation_limit)) {
+      throw new GenerationSafetyError(
+        "MONTHLY_LIMIT",
+        `Monthly generation limit reached (${settings.monthly_generation_limit}).`,
+      );
+    }
+
+    const effectiveTargetDeviceId = input.targetDeviceId ?? settings.default_target_device_id ?? null;
+    if (effectiveTargetDeviceId) {
+      const devices = await tx`
+        select id, name, free_disk_bytes, last_seen_at, status,
+          extract(epoch from (now() - last_seen_at))::int as seconds_since_seen
+        from devices
+        where id = ${effectiveTargetDeviceId} and workspace_id = ${workspace.id}
+        limit 1
+      `;
+      const device = devices[0];
+      if (!device) {
+        throw new GenerationSafetyError("INVALID_DEVICE", "Selected target device does not exist in this workspace.");
+      }
+
+      const isFresh = device.last_seen_at && Number(device.seconds_since_seen) <= Number(settings.device_stale_after_seconds);
+      if (
+        isFresh &&
+        device.free_disk_bytes !== null &&
+        Number(device.free_disk_bytes) < Number(settings.min_free_disk_bytes)
+      ) {
+        const freeGb = (Number(device.free_disk_bytes) / 1024 ** 3).toFixed(1);
+        const reserveGb = (Number(settings.min_free_disk_bytes) / 1024 ** 3).toFixed(0);
+        throw new GenerationSafetyError(
+          "LOW_DISK",
+          `${device.name} has ${freeGb} GB free. At least ${reserveGb} GB must remain available.`,
+        );
+      }
+    }
+
     const rows = await tx`
       insert into generation_jobs (
         generation_request_id, workspace_id, project_id, scene_id,
@@ -118,7 +209,7 @@ export async function createGenerationJob(input: {
         resolution_snapshot, status
       ) values (
         ${input.generationRequestId}, ${workspace.id}, ${input.projectId}, ${input.sceneId ?? null},
-        ${input.requestedApiProfileId ?? null}, ${input.targetDeviceId ?? null}, ${input.modelId},
+        ${input.requestedApiProfileId ?? null}, ${effectiveTargetDeviceId}, ${input.modelId},
         ${input.promptSnapshot}, ${input.aspectRatioSnapshot ?? "9:16"},
         ${input.durationSecondsSnapshot ?? null}, ${input.resolutionSnapshot ?? null}, 'queued'
       )
