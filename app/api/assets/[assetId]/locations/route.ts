@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireCompanionToken } from "@/lib/companion-auth";
 import { dbConfigured } from "@/lib/db";
 import { upsertAssetLocation } from "@/lib/devices";
 
@@ -11,6 +12,7 @@ export async function POST(
   }
 
   try {
+    requireCompanionToken(request);
     const { assetId } = await context.params;
     const body = await request.json();
 
@@ -30,7 +32,8 @@ export async function POST(
 
     return NextResponse.json({ location });
   } catch (error) {
-    console.error(error);
-    return NextResponse.json({ error: "Failed to update asset location" }, { status: 500 });
+    const status = Number((error as Error & { status?: number }).status ?? 500);
+    const message = error instanceof Error ? error.message : "Failed to update asset location";
+    return NextResponse.json({ error: message }, { status });
   }
 }
