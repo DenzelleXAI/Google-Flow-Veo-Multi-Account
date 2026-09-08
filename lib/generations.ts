@@ -19,6 +19,68 @@ export type GenerationAssetInput = {
   sortOrder?: number;
 };
 
+export type GenerationJobRecord = {
+  id: string;
+  generation_request_id: string;
+  workspace_id: string;
+  project_id: string;
+  scene_id: string | null;
+  requested_api_profile_id: string | null;
+  target_device_id: string | null;
+  model_id: string;
+  prompt_snapshot: string;
+  aspect_ratio_snapshot: string;
+  duration_seconds_snapshot: number | null;
+  resolution_snapshot: string | null;
+  status: GenerationStatus;
+  project_name?: string;
+  scene_title?: string | null;
+  created_at?: string | Date;
+  updated_at?: string | Date;
+};
+
+export type GenerationAttemptRecord = {
+  id: string;
+  generation_job_id: string;
+  api_profile_id: string | null;
+  provider: string;
+  model_id: string;
+  provider_operation_id: string | null;
+  status: string;
+  started_at: string | Date;
+  completed_at: string | Date | null;
+  error_code: string | null;
+  error_message: string | null;
+};
+
+export type GenerationOutputRecord = {
+  id: string;
+  asset_id: string;
+  created_at: string | Date;
+  filename: string;
+  relative_path: string | null;
+  r2_key: string | null;
+  sha256: string | null;
+  file_size_bytes: number | null;
+};
+
+export type GenerationInputRecord = {
+  asset_id: string;
+  role: GenerationAssetInput["role"];
+  sort_order: number;
+  filename: string;
+  mime_type: string | null;
+  r2_key: string | null;
+  sha256: string | null;
+  file_size_bytes: number | null;
+};
+
+export type GenerationJobDetail = GenerationJobRecord & {
+  attempts: GenerationAttemptRecord[];
+  outputs: GenerationOutputRecord[];
+  inputs: GenerationInputRecord[];
+};
+
 export async function createGenerationJob(input: {
   generationRequestId: string;
   projectId: string;
@@ -44,7 +106,9 @@ export async function createGenerationJob(input: {
       limit 1
     `;
 
-    if (existing[0]) return { job: existing[0], created: false };
+    if (existing[0]) {
+      return { job: existing[0] as unknown as GenerationJobRecord, created: false };
+    }
 
     const rows = await tx`
       insert into generation_jobs (
@@ -61,20 +125,22 @@ export async function createGenerationJob(input: {
       returning *
     `;
 
+    const job = rows[0] as unknown as GenerationJobRecord;
+
     for (const item of input.assetInputs ?? []) {
       await tx`
         insert into generation_job_assets (generation_job_id, asset_id, role, sort_order)
-        select ${rows[0].id}, a.id, ${item.role}, ${item.sortOrder ?? 0}
+        select ${job.id}, a.id, ${item.role}, ${item.sortOrder ?? 0}
         from assets a
         where a.id = ${item.assetId} and a.project_id = ${input.projectId}
       `;
     }
 
-    return { job: rows[0], created: true };
+    return { job, created: true };
   });
 }
 
-export async function getGenerationJob(jobId: string) {
+export async function getGenerationJob(jobId: string): Promise<GenerationJobDetail | null> {
   const sql = requireDb();
   const rows = await sql`
     select j.*, p.name as project_name, s.title as scene_title
@@ -85,6 +151,8 @@ export async function getGenerationJob(jobId: string) {
     limit 1
   `;
   if (!rows[0]) return null;
+
+  const job = rows[0] as unknown as GenerationJobRecord;
 
   const attempts = await sql`
     select * from generation_attempts
@@ -107,27 +175,35 @@ export async function getGenerationJob(jobId: string) {
     where gja.generation_job_id = ${jobId}
     order by gja.role asc, gja.sort_order asc
   `;
-  return { ...rows[0], attempts, outputs, inputs };
+
+  return {
+    ...job,
+    attempts: Array.from(attempts) as unknown as GenerationAttemptRecord[],
+    outputs: Array.from(outputs) as unknown as GenerationOutputRecord[],
+    inputs: Array.from(inputs) as unknown as GenerationInputRecord[],
+  };
 }
 
 export async function listRecentGenerationJobs(projectId?: string | null) {
   const sql = requireDb();
   const workspace = await ensurePersonalWorkspace();
-  return projectId
-    ? sql`
+  const rows = projectId
+    ? await sql`
         select j.*, s.title as scene_title
         from generation_jobs j
         left join scenes s on s.id = j.scene_id
         where j.workspace_id = ${workspace.id} and j.project_id = ${projectId}
         order by j.created_at desc limit 50
       `
-    : sql`
+    : await sql`
         select j.*, s.title as scene_title
         from generation_jobs j
         left join scenes s on s.id = j.scene_id
         where j.workspace_id = ${workspace.id}
         order by j.created_at desc limit 50
       `;
+
+  return Array.from(rows) as unknown as GenerationJobRecord[];
 }
 
 export async function updateGenerationStatus(jobId: string, status: GenerationStatus) {
@@ -136,7 +212,7 @@ export async function updateGenerationStatus(jobId: string, status: GenerationSt
     update generation_jobs set status = ${status}, updated_at = now()
     where id = ${jobId} returning *
   `;
-  return rows[0] ?? null;
+  return (rows[0] as unknown as GenerationJobRecord | undefined) ?? null;
 }
 
 export async function startAttempt(jobId: string, apiProfileId: string | null, modelId: string) {
@@ -146,7 +222,7 @@ export async function startAttempt(jobId: string, apiProfileId: string | null, m
     values (${jobId}, ${apiProfileId}, 'google', ${modelId}, 'submitting')
     returning *
   `;
-  return rows[0];
+  return rows[0] as unknown as GenerationAttemptRecord;
 }
 
 export async function updateAttempt(input: {
@@ -168,7 +244,7 @@ export async function updateAttempt(input: {
     where id = ${input.attemptId}
     returning *
   `;
-  return rows[0] ?? null;
+  return (rows[0] as unknown as GenerationAttemptRecord | undefined) ?? null;
 }
 
 export async function saveRelayOutput(input: {
