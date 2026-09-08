@@ -123,26 +123,66 @@ export async function upsertAssetLocation(input: {
   fileSizeBytes?: number | null;
 }) {
   const sql = requireDb();
+  const workspace = await ensurePersonalWorkspace();
 
-  const rows = await sql`
-    insert into asset_locations (
-      asset_id, device_id, relative_path, status, expected_hash, verified_hash,
-      file_size_bytes, verified_at, last_seen_at
-    ) values (
-      ${input.assetId}, ${input.deviceId}, ${input.relativePath ?? null}, ${input.status},
-      ${input.expectedHash ?? null}, ${input.verifiedHash ?? null}, ${input.fileSizeBytes ?? null},
-      ${input.status === 'verified' ? new Date() : null}, now()
-    )
-    on conflict (asset_id, device_id) do update
-      set relative_path = excluded.relative_path,
-          status = excluded.status,
-          expected_hash = excluded.expected_hash,
-          verified_hash = excluded.verified_hash,
-          file_size_bytes = excluded.file_size_bytes,
-          verified_at = case when excluded.status = 'verified' then now() else asset_locations.verified_at end,
-          last_seen_at = now()
-    returning *
-  `;
+  return sql.begin(async (tx) => {
+    const devices = await tx`
+      select id from devices
+      where id = ${input.deviceId} and workspace_id = ${workspace.id}
+      limit 1
+    `;
+    if (!devices[0]) throw new Error("Device does not belong to this workspace.");
 
-  return rows[0];
+    const assets = await tx`
+      select a.id, a.sha256, p.workspace_id
+      from assets a
+      join projects p on p.id = a.project_id
+      where a.id = ${input.assetId} and p.workspace_id = ${workspace.id}
+      limit 1
+    `;
+    const asset = assets[0];
+    if (!asset) throw new Error("Asset does not belong to this workspace.");
+
+    if (input.status === "verified") {
+      if (!asset.sha256) throw new Error("Asset has no expected SHA-256 hash.");
+      if (!input.verifiedHash || input.verifiedHash !== asset.sha256) {
+        throw new Error("Verified hash does not match the asset SHA-256.");
+      }
+    }
+
+    const rows = await tx`
+      insert into asset_locations (
+        asset_id, device_id, relative_path, status, expected_hash, verified_hash,
+        file_size_bytes, verified_at, last_seen_at
+      ) values (
+        ${input.assetId}, ${input.deviceId}, ${input.relativePath ?? null}, ${input.status},
+        ${asset.sha256 ?? input.expectedHash ?? null}, ${input.verifiedHash ?? null}, ${input.fileSizeBytes ?? null},
+        ${input.status === 'verified' ? new Date() : null}, now()
+      )
+      on conflict (asset_id, device_id) do update
+        set relative_path = excluded.relative_path,
+            status = excluded.status,
+            expected_hash = excluded.expected_hash,
+            verified_hash = excluded.verified_hash,
+            file_size_bytes = excluded.file_size_bytes,
+            verified_at = case when excluded.status = 'verified' then now() else asset_locations.verified_at end,
+            last_seen_at = now()
+      returning *
+    `;
+
+    if (input.status === "verified") {
+      await tx`
+        update generation_jobs j
+        set status = 'local_confirmed', updated_at = now()
+        from generation_outputs go
+        where go.generation_job_id = j.id
+          and go.asset_id = ${input.assetId}
+          and j.target_device_id = ${input.deviceId}
+          and j.workspace_id = ${workspace.id}
+          and j.status = 'cloud_ready'
+      `;
+    }
+
+    return rows[0];
+  });
 }
