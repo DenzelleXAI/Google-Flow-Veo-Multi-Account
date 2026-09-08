@@ -8,6 +8,7 @@ export type GenerationStatus =
   | "downloading_from_provider"
   | "uploading_relay"
   | "cloud_ready"
+  | "local_confirmed"
   | "failed_ambiguous"
   | "failed_retryable"
   | "failed_final"
