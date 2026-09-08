@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireCompanionToken } from "@/lib/companion-auth";
 import { dbConfigured } from "@/lib/db";
 import { listDevices, registerOrHeartbeatDevice } from "@/lib/devices";
 
@@ -22,6 +23,7 @@ export async function POST(request: Request) {
   }
 
   try {
+    requireCompanionToken(request);
     const body = await request.json();
     if (!body?.name || typeof body.name !== "string") {
       return NextResponse.json({ error: "Device name is required" }, { status: 400 });
@@ -37,7 +39,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ device });
   } catch (error) {
-    console.error(error);
-    return NextResponse.json({ error: "Failed to register device" }, { status: 500 });
+    const status = Number((error as Error & { status?: number }).status ?? 500);
+    const message = error instanceof Error ? error.message : "Failed to register device";
+    return NextResponse.json({ error: message }, { status });
   }
 }
