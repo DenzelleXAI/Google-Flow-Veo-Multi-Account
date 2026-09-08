@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import { dbConfigured } from "@/lib/db";
-import { createGenerationJob, listRecentGenerationJobs, updateGenerationStatus, type GenerationAssetInput } from "@/lib/generations";
+import {
+  createGenerationJob,
+  GenerationSafetyError,
+  listRecentGenerationJobs,
+  updateGenerationStatus,
+  type GenerationAssetInput,
+} from "@/lib/generations";
 import { inngest } from "@/lib/inngest";
 import { validateVeoSettings } from "@/lib/model-registry";
 
@@ -112,6 +118,10 @@ export async function POST(request: Request) {
 
     return NextResponse.json(result, { status: result.created ? 201 : 200 });
   } catch (error) {
+    if (error instanceof GenerationSafetyError) {
+      const status = error.code === "DAILY_LIMIT" || error.code === "MONTHLY_LIMIT" ? 429 : 409;
+      return NextResponse.json({ error: error.message, code: error.code }, { status });
+    }
     console.error(error);
     return NextResponse.json({ error: "Failed to create generation job" }, { status: 500 });
   }
