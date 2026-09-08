@@ -10,7 +10,7 @@ import {
   updateGenerationStatus,
 } from "./generations";
 import { resolveGoogleProfile } from "./provider-profiles";
-import { downloadVeoVideo, pollVeoOperation, submitVeoGeneration } from "./providers/veo";
+import { createVeoClient, downloadVeoVideo, pollVeoOperation, submitVeoGeneration } from "./providers/veo";
 import { uploadVideoToRelay } from "./r2";
 
 export const runVeoGeneration = inngest.createFunction(
@@ -58,11 +58,13 @@ export const runVeoGeneration = inngest.createFunction(
       return submitted.operation;
     });
 
-    const ai = (await submitVeoGenerationForPolling(resolved.apiKey)).ai;
+    const ai = createVeoClient(resolved.apiKey);
 
     for (let poll = 0; poll < 180 && !operation.done; poll += 1) {
       await step.sleep(`poll-delay-${poll}`, "10s");
-      operation = await step.run(`poll-veo-${poll}`, async () => pollVeoOperation(ai, operation));
+      operation = await step.run(`poll-veo-${poll}`, async () => {
+        return pollVeoOperation(ai, operation);
+      });
     }
 
     if (!operation.done) {
@@ -71,7 +73,7 @@ export const runVeoGeneration = inngest.createFunction(
           attemptId: attempt.id,
           status: "failed_retryable",
           errorCode: "PROVIDER_TIMEOUT",
-          errorMessage: "Veo operation did not complete within the worker polling window.",
+          errorMessage: "Veo operation did not complete within the polling window.",
           completed: true,
         });
         await updateGenerationStatus(jobId, "failed_retryable");
@@ -79,23 +81,21 @@ export const runVeoGeneration = inngest.createFunction(
       throw new Error("Veo generation polling timed out.");
     }
 
-    const temp = await step.run("prepare-download", async () => {
-      await updateGenerationStatus(jobId, "downloading_from_provider");
-      return mkdtemp(join(tmpdir(), "persistent-veo-"));
-    });
-
     const filename = `${job.id}.mp4`;
-    const localPath = join(temp, filename);
 
     try {
-      await step.run("download-provider-output", async () => {
-        await downloadVeoVideo(ai, operation, localPath);
-      });
-
-      const relay = await step.run("upload-r2-relay", async () => {
-        await updateGenerationStatus(jobId, "uploading_relay");
-        const key = `generations/${job.workspace_id}/${job.project_id}/${job.id}/${filename}`;
-        return uploadVideoToRelay({ path: localPath, key });
+      const relay = await step.run("download-and-relay-output", async () => {
+        const temp = await mkdtemp(join(tmpdir(), "persistent-veo-"));
+        const localPath = join(temp, filename);
+        try {
+          await updateGenerationStatus(jobId, "downloading_from_provider");
+          await downloadVeoVideo(ai, operation, localPath);
+          await updateGenerationStatus(jobId, "uploading_relay");
+          const key = `generations/${job.workspace_id}/${job.project_id}/${job.id}/${filename}`;
+          return await uploadVideoToRelay({ path: localPath, key });
+        } finally {
+          await rm(temp, { recursive: true, force: true }).catch(() => undefined);
+        }
       });
 
       const asset = await step.run("persist-output", async () => {
@@ -126,13 +126,6 @@ export const runVeoGeneration = inngest.createFunction(
         await updateGenerationStatus(jobId, "failed_retryable");
       });
       throw error;
-    } finally {
-      await rm(temp, { recursive: true, force: true }).catch(() => undefined);
     }
   },
 );
-
-async function submitVeoGenerationForPolling(apiKey: string) {
-  const { createVeoClient } = await import("./providers/veo");
-  return { ai: createVeoClient(apiKey) };
-}
