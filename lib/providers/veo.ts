@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, VideoGenerationReferenceType } from "@google/genai";
 
 export type VeoImageInput = {
   bytes: Buffer;
@@ -31,7 +31,7 @@ export async function submitVeoGeneration(input: VeoGenerateInput) {
   const ai = createVeoClient(input.apiKey);
   const referenceImages = (input.referenceImages ?? []).map((image) => ({
     image: toSdkImage(image),
-    referenceType: "asset" as const,
+    referenceType: VideoGenerationReferenceType.ASSET,
   }));
 
   const operation = await ai.models.generateVideos({
