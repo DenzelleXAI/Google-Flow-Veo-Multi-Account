@@ -1,5 +1,6 @@
 import { requireDb } from "./db";
 import { ensurePersonalWorkspace } from "./workspace";
+import { estimateVeoCostUsd } from "./veo-pricing";
 
 export type GenerationStatus =
   | "queued"
@@ -22,7 +23,15 @@ export type GenerationAssetInput = {
 
 export class GenerationSafetyError extends Error {
   constructor(
-    public readonly code: "DAILY_LIMIT" | "MONTHLY_LIMIT" | "LOW_DISK" | "INVALID_DEVICE" | "INVALID_PROJECT",
+    public readonly code:
+      | "DAILY_LIMIT"
+      | "MONTHLY_LIMIT"
+      | "PER_REQUEST_SPEND_LIMIT"
+      | "DAILY_SPEND_LIMIT"
+      | "MONTHLY_SPEND_LIMIT"
+      | "LOW_DISK"
+      | "INVALID_DEVICE"
+      | "INVALID_PROJECT",
     message: string,
   ) {
     super(message);
@@ -43,6 +52,8 @@ export type GenerationJobRecord = {
   aspect_ratio_snapshot: string;
   duration_seconds_snapshot: number | null;
   resolution_snapshot: string | null;
+  estimated_cost_usd: number | null;
+  pricing_version: string | null;
   status: GenerationStatus;
   project_name?: string;
   scene_title?: string | null;
@@ -138,12 +149,28 @@ export async function createGenerationJob(input: {
 
     const settingsRows = await tx`
       select workspace_id, default_target_device_id, daily_generation_limit,
-             monthly_generation_limit, min_free_disk_bytes, device_stale_after_seconds
+             monthly_generation_limit, daily_spend_limit_usd, monthly_spend_limit_usd,
+             per_request_spend_limit_usd, min_free_disk_bytes, device_stale_after_seconds
       from workspace_settings
       where workspace_id = ${workspace.id}
       for update
     `;
     const settings = settingsRows[0];
+
+    const durationSeconds = input.durationSecondsSnapshot ?? 8;
+    const resolution = input.resolutionSnapshot ?? "720p";
+    const pricing = estimateVeoCostUsd({
+      modelId: input.modelId,
+      resolution,
+      durationSeconds,
+    });
+
+    if (pricing.estimatedCostUsd > Number(settings.per_request_spend_limit_usd)) {
+      throw new GenerationSafetyError(
+        "PER_REQUEST_SPEND_LIMIT",
+        `Estimated cost $${pricing.estimatedCostUsd.toFixed(2)} exceeds the per-request cap of $${Number(settings.per_request_spend_limit_usd).toFixed(2)}.`,
+      );
+    }
 
     const usageRows = await tx`
       select
@@ -154,7 +181,15 @@ export async function createGenerationJob(input: {
         count(*) filter (
           where created_at >= date_trunc('month', now())
             and status not in ('cancelled', 'failed_final')
-        )::int as monthly_count
+        )::int as monthly_count,
+        coalesce(sum(estimated_cost_usd) filter (
+          where created_at >= date_trunc('day', now())
+            and status not in ('cancelled', 'failed_final')
+        ), 0)::numeric as daily_reserved_usd,
+        coalesce(sum(estimated_cost_usd) filter (
+          where created_at >= date_trunc('month', now())
+            and status not in ('cancelled', 'failed_final')
+        ), 0)::numeric as monthly_reserved_usd
       from generation_jobs
       where workspace_id = ${workspace.id}
     `;
@@ -170,6 +205,22 @@ export async function createGenerationJob(input: {
       throw new GenerationSafetyError(
         "MONTHLY_LIMIT",
         `Monthly generation limit reached (${settings.monthly_generation_limit}).`,
+      );
+    }
+
+    const projectedDailyUsd = Number(usage.daily_reserved_usd) + pricing.estimatedCostUsd;
+    const projectedMonthlyUsd = Number(usage.monthly_reserved_usd) + pricing.estimatedCostUsd;
+
+    if (projectedDailyUsd > Number(settings.daily_spend_limit_usd)) {
+      throw new GenerationSafetyError(
+        "DAILY_SPEND_LIMIT",
+        `This request would reserve $${projectedDailyUsd.toFixed(2)} today, above the $${Number(settings.daily_spend_limit_usd).toFixed(2)} daily cap.`,
+      );
+    }
+    if (projectedMonthlyUsd > Number(settings.monthly_spend_limit_usd)) {
+      throw new GenerationSafetyError(
+        "MONTHLY_SPEND_LIMIT",
+        `This request would reserve $${projectedMonthlyUsd.toFixed(2)} this month, above the $${Number(settings.monthly_spend_limit_usd).toFixed(2)} monthly cap.`,
       );
     }
 
@@ -207,12 +258,12 @@ export async function createGenerationJob(input: {
         generation_request_id, workspace_id, project_id, scene_id,
         requested_api_profile_id, target_device_id, model_id,
         prompt_snapshot, aspect_ratio_snapshot, duration_seconds_snapshot,
-        resolution_snapshot, status
+        resolution_snapshot, estimated_cost_usd, pricing_version, status
       ) values (
         ${input.generationRequestId}, ${workspace.id}, ${input.projectId}, ${input.sceneId ?? null},
         ${input.requestedApiProfileId ?? null}, ${effectiveTargetDeviceId}, ${input.modelId},
         ${input.promptSnapshot}, ${input.aspectRatioSnapshot ?? "9:16"},
-        ${input.durationSecondsSnapshot ?? null}, ${input.resolutionSnapshot ?? null}, 'queued'
+        ${durationSeconds}, ${resolution}, ${pricing.estimatedCostUsd}, ${pricing.pricingVersion}, 'queued'
       )
       returning *
     `;
