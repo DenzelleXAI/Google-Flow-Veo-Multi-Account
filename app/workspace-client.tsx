@@ -19,7 +19,15 @@ type GenerationJob = {
   status: string;
   model_id: string;
   scene_title?: string | null;
+  requested_api_profile_id?: string | null;
   outputs?: Array<{ asset_id: string; filename: string; r2_key?: string | null }>;
+};
+type ApiProfile = {
+  id: string;
+  name: string;
+  provider: string;
+  credential_source: "environment" | "encrypted";
+  enabled: boolean;
 };
 
 const demoProjects: Project[] = [
@@ -53,11 +61,15 @@ export default function WorkspaceClient() {
   const [generationState, setGenerationState] = useState<"idle" | "submitting" | "queued" | "error">("idle");
   const [initialFrame, setInitialFrame] = useState<Asset | null>(null);
   const [uploadState, setUploadState] = useState<"idle" | "uploading" | "error">("idle");
+  const [profiles, setProfiles] = useState<ApiProfile[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState("");
+  const [profileState, setProfileState] = useState<"idle" | "saving" | "testing" | "error">("idle");
   const pendingGenerationRequestId = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedProject = useMemo(() => projects.find((project) => project.id === selectedProjectId) ?? projects[0], [projects, selectedProjectId]);
   const selectedScene = useMemo(() => scenes.find((scene) => scene.id === selectedSceneId) ?? scenes[0], [scenes, selectedSceneId]);
+  const selectedProfile = useMemo(() => profiles.find((profile) => profile.id === selectedProfileId) ?? profiles.find((profile) => profile.enabled), [profiles, selectedProfileId]);
 
   async function refreshGenerationJobs(projectId = selectedProjectId) {
     if (backendMode !== "database" || !projectId) return;
@@ -65,6 +77,19 @@ export default function WorkspaceClient() {
       const response = await fetch(`/api/generations?projectId=${encodeURIComponent(projectId)}`, { cache: "no-store" });
       const data = response.ok ? await response.json() : { jobs: [] };
       setGenerationJobs(Array.isArray(data.jobs) ? data.jobs : []);
+    } catch {}
+  }
+
+  async function refreshProfiles() {
+    if (backendMode !== "database") return;
+    try {
+      const response = await fetch("/api/profiles", { cache: "no-store" });
+      if (!response.ok) return;
+      const data = await response.json();
+      const nextProfiles = Array.isArray(data.profiles) ? data.profiles : [];
+      setProfiles(nextProfiles);
+      const nextSelected = data.defaultProfileId || nextProfiles.find((profile: ApiProfile) => profile.enabled)?.id || "";
+      setSelectedProfileId(nextSelected);
     } catch {}
   }
 
@@ -90,6 +115,10 @@ export default function WorkspaceClient() {
       });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (backendMode === "database") void refreshProfiles();
+  }, [backendMode]);
 
   useEffect(() => {
     if (backendMode !== "database" || !selectedProjectId) return;
@@ -188,6 +217,62 @@ export default function WorkspaceClient() {
     }
   }
 
+  async function chooseProfile(profileId: string) {
+    setSelectedProfileId(profileId);
+    if (backendMode !== "database" || !profileId) return;
+    setProfileState("saving");
+    try {
+      const response = await fetch(`/api/profiles/${profileId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ makeDefault: true }),
+      });
+      if (!response.ok) throw new Error("Profile switch failed");
+      setProfileState("idle");
+    } catch {
+      setProfileState("error");
+    }
+  }
+
+  async function addProfile() {
+    if (backendMode !== "database") return;
+    const name = window.prompt("Profile name", `Google Profile ${profiles.length + 1}`);
+    if (!name?.trim()) return;
+    const apiKey = window.prompt("Google API/Auth key. It will be encrypted server-side and never returned to the browser.");
+    if (!apiKey?.trim()) return;
+
+    setProfileState("saving");
+    try {
+      const response = await fetch("/api/profiles", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: name.trim(), apiKey: apiKey.trim() }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Failed to add profile");
+      const profile = data.profile as ApiProfile;
+      setProfiles((current) => [...current, profile]);
+      await chooseProfile(profile.id);
+      setProfileState("idle");
+    } catch {
+      setProfileState("error");
+    }
+  }
+
+  async function testSelectedProfile() {
+    if (!selectedProfileId) return;
+    setProfileState("testing");
+    try {
+      const response = await fetch(`/api/profiles/${selectedProfileId}/test`, { method: "POST" });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error ?? "Profile test failed");
+      window.alert(`Profile connected${data.model ? ` — ${data.model}` : ""}`);
+      setProfileState("idle");
+    } catch {
+      setProfileState("error");
+    }
+  }
+
   async function createGeneration() {
     if (backendMode !== "database" || !selectedProjectId || !selectedSceneId || !selectedScene || !prompt.trim() || generationState === "submitting") return;
     if (!pendingGenerationRequestId.current) pendingGenerationRequestId.current = crypto.randomUUID();
@@ -200,6 +285,7 @@ export default function WorkspaceClient() {
           generationRequestId: pendingGenerationRequestId.current,
           projectId: selectedProjectId,
           sceneId: selectedSceneId,
+          requestedApiProfileId: selectedProfileId || null,
           modelId: "veo-3.1-generate-preview",
           promptSnapshot: prompt,
           aspectRatioSnapshot: selectedScene.aspect_ratio ?? "9:16",
@@ -227,7 +313,12 @@ export default function WorkspaceClient() {
         <div className="top-actions">
           <button className="ghost-button">{backendMode === "database" ? "Database connected" : "Demo mode"}</button>
           <button className="ghost-button">Local media: Home PC</button>
-          <button className="profile-button"><span className="status-dot" /> Default Google Profile⌄</button>
+          <select className="profile-select" value={selectedProfileId} onChange={(event) => void chooseProfile(event.target.value)} disabled={backendMode !== "database" || profileState === "saving"}>
+            {!profiles.length && <option value="">Default Google Profile</option>}
+            {profiles.filter((profile) => profile.enabled).map((profile) => <option value={profile.id} key={profile.id}>{profile.name}</option>)}
+          </select>
+          <button className="profile-button" onClick={() => void testSelectedProfile()} disabled={!selectedProfileId || profileState === "testing"}>{profileState === "testing" ? "Testing…" : "Test"}</button>
+          <button className="profile-button" onClick={() => void addProfile()} disabled={backendMode !== "database" || profileState === "saving"}>＋ Profile</button>
         </div>
       </header>
 
@@ -272,19 +363,20 @@ export default function WorkspaceClient() {
               <button className="setting-chip">{selectedScene?.resolution ?? "1080p"}⌄</button>
               <button className="generate-button" onClick={createGeneration} disabled={backendMode !== "database" || !selectedSceneId || !prompt.trim() || generationState === "submitting" || uploadState === "uploading"}>{generationState === "submitting" ? "Submitting…" : generationState === "error" ? "Retry Generate" : initialFrame ? "▶ Generate from image" : "▶ Generate"}</button>
             </div>
+            <div className="execution-note">Execution profile: <strong>{selectedProfile?.name ?? "Default Google Profile"}</strong>. Switching profiles does not change project data.</div>
           </div>
 
           <div className="generations-block">
             <div className="section-title"><h3>Generation history</h3><button onClick={() => void refreshGenerationJobs()}>Refresh</button></div>
             <div className="generation-list">
-              {generationJobs.length ? generationJobs.map((job) => <div className="generation-row" key={job.id}><span className={`job-dot ${job.status}`} /><div><strong>{job.scene_title ?? selectedScene?.title ?? "Generation"}</strong><small>{job.model_id}</small></div><span className={`job-status ${job.status}`}>{job.status.replaceAll("_", " ")}</span></div>) : <div className="generation-row"><span className="job-dot draft" /><div><strong>No generations yet</strong><small>Configure Google, Inngest, PostgreSQL and R2 to run the full durable pipeline.</small></div><span className="job-status draft">Ready</span></div>}
+              {generationJobs.length ? generationJobs.map((job) => <div className="generation-row" key={job.id}><span className={`job-dot ${job.status}`} /><div><strong>{job.scene_title ?? selectedScene?.title ?? "Generation"}</strong><small>{job.model_id}{job.requested_api_profile_id ? " · profile locked" : ""}</small></div><span className={`job-status ${job.status}`}>{job.status.replaceAll("_", " ")}</span></div>) : <div className="generation-row"><span className="job-dot draft" /><div><strong>No generations yet</strong><small>Configure Google, Inngest, PostgreSQL and R2 to run the full durable pipeline.</small></div><span className="job-status draft">Ready</span></div>}
             </div>
           </div>
         </section>
 
         <aside className="panel agent-panel">
           <div className="panel-heading"><div><span className="eyebrow">Project-aware</span><h2>Agent</h2></div><span className="agent-badge">Phase 4</span></div>
-          <div className="chat-stream"><div className="message agent-message"><strong>Image-to-video wired.</strong><p>Reference images are uploaded to R2, persisted as assets, frozen onto generation jobs, then loaded by the durable Veo worker even when the source PC is offline.</p><div className="tool-list"><span>✓ Immutable image inputs</span><span>✓ R2 input relay</span><span>✓ Veo initial-frame support</span><span>✓ Durable output relay</span></div></div></div>
+          <div className="chat-stream"><div className="message agent-message"><strong>Manual profile switching wired.</strong><p>Projects stay provider-independent. New generations freeze the selected profile ID while encrypted credentials remain server-side and never enter model context or browser storage.</p><div className="tool-list"><span>✓ AES-256-GCM credentials</span><span>✓ Add/test profiles</span><span>✓ Manual profile selection</span><span>✓ Per-generation profile lock</span></div></div></div>
           <div className="agent-input"><textarea placeholder="Agent will be connected in Phase 4…" disabled /><div><button className="tiny-button" disabled>＋ Asset</button><button className="send-button" disabled>↑</button></div></div>
           <div className="relay-card"><span className="relay-icon">☁</span><div><strong>R2 relay connected both ways</strong><small>Input images and completed videos can survive browser closes and offline target devices.</small></div></div>
         </aside>
