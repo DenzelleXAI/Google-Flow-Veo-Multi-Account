@@ -64,7 +64,7 @@ export async function POST(request: Request) {
     if (result.created) {
       try {
         await inngest.send({
-          name: "video/generation.requested",
+          name: "video/generation.submit",
           data: { jobId: result.job.id },
         });
       } catch (dispatchError) {
