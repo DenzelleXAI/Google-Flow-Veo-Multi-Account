@@ -55,6 +55,7 @@ create table if not exists assets (
   project_id uuid not null references projects(id) on delete cascade,
   type text not null,
   filename text not null,
+  mime_type text,
   relative_path text,
   r2_key text,
   sha256 text,
@@ -64,6 +65,8 @@ create table if not exists assets (
   duration_seconds numeric,
   created_at timestamptz not null default now()
 );
+
+alter table assets add column if not exists mime_type text;
 
 create table if not exists asset_locations (
   id uuid primary key default gen_random_uuid(),
@@ -119,11 +122,20 @@ create table if not exists generation_jobs (
   unique(workspace_id, generation_request_id)
 );
 
--- Safe upgrades for databases bootstrapped before immutable generation snapshots existed.
 alter table generation_jobs add column if not exists prompt_snapshot text not null default '';
 alter table generation_jobs add column if not exists aspect_ratio_snapshot text not null default '9:16';
 alter table generation_jobs add column if not exists duration_seconds_snapshot integer;
 alter table generation_jobs add column if not exists resolution_snapshot text;
+
+create table if not exists generation_job_assets (
+  id uuid primary key default gen_random_uuid(),
+  generation_job_id uuid not null references generation_jobs(id) on delete cascade,
+  asset_id uuid not null references assets(id) on delete restrict,
+  role text not null,
+  sort_order integer not null default 0,
+  created_at timestamptz not null default now(),
+  unique(generation_job_id, role, sort_order)
+);
 
 create table if not exists generation_attempts (
   id uuid primary key default gen_random_uuid(),
@@ -151,5 +163,6 @@ create index if not exists idx_projects_workspace on projects(workspace_id);
 create index if not exists idx_scenes_project on scenes(project_id);
 create index if not exists idx_assets_project on assets(project_id);
 create index if not exists idx_jobs_status on generation_jobs(status);
+create index if not exists idx_job_assets_job on generation_job_assets(generation_job_id);
 create index if not exists idx_attempts_job on generation_attempts(generation_job_id);
 create index if not exists idx_asset_locations_device on asset_locations(device_id);
