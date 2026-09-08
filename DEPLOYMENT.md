@@ -94,15 +94,48 @@ Preflight checks:
 
 - project ownership
 - model capability
-- daily limit
-- monthly limit
+- daily generation count limit
+- monthly generation count limit
+- estimated per-request Veo cost
+- projected daily reserved Veo spend
+- projected monthly reserved Veo spend
 - target device validity
 - target-device disk reserve when recently online
 - selected/default Google profile availability
 
 It does **not** create a generation job and does **not** dispatch Inngest or Veo.
 
-## 6. Profile management
+## 6. Spend hard stops
+
+Spend limits live in `workspace_settings` and can be changed from **Safety settings** in the workspace.
+
+Initial defaults:
+
+```text
+Per request: $5.00
+Per day:     $20.00
+Per month:   $100.00
+```
+
+The app estimates the request cost from the selected Veo model, resolution, and duration before a generation job is inserted.
+
+The estimate is stored on the job together with a pricing-version identifier. Current pricing assumptions are versioned in `lib/veo-pricing.ts` rather than scattered across the application.
+
+The job-creation transaction locks the workspace settings row and evaluates:
+
+```text
+request estimate <= per-request cap
+current daily reserved spend + request estimate <= daily cap
+current monthly reserved spend + request estimate <= monthly cap
+```
+
+This occurs inside the same transaction that protects generation idempotency, so concurrent clicks cannot race past the spend caps.
+
+The reservation model is intentionally conservative. Jobs in uncertain states such as `FAILED_AMBIGUOUS` remain counted because the provider may already have accepted a billable generation. A reservation is excluded only when the job is in a clearly non-billable terminal state such as `CANCELLED` or `FAILED_FINAL`.
+
+Provider pricing can change. Re-verify the official Google pricing page before changing `lib/veo-pricing.ts`.
+
+## 7. Profile management
 
 Open:
 
@@ -120,7 +153,7 @@ Use this page to:
 
 Disabling a profile never deletes or changes projects, prompts, media, agent history, or prior generation attempts.
 
-## 7. Controlled first paid Veo test
+## 8. Controlled first paid Veo test
 
 Use one short, non-critical project and one explicit Generate click.
 
@@ -143,7 +176,7 @@ FAILED_AMBIGUOUS
 
 Do not automatically resubmit that state because the provider may already have accepted a billable request.
 
-## 8. Desktop companion
+## 9. Desktop companion
 
 On the target PC configure:
 
@@ -178,7 +211,7 @@ After server-side hash confirmation the generation becomes:
 LOCAL_CONFIRMED
 ```
 
-## 9. R2 lifecycle
+## 10. R2 lifecycle
 
 R2 is a transient relay, not the permanent media library.
 
@@ -186,7 +219,7 @@ Recommended initial retention while testing: **14 days**.
 
 Do not aggressively delete relay objects immediately after one download. Keep a recovery window until the local-first delivery workflow has proven stable.
 
-## 10. Production deployment strategy
+## 11. Production deployment strategy
 
 Recommended order:
 
@@ -195,7 +228,7 @@ Recommended order:
 3. verify project CRUD and agent persistence
 4. verify image upload to R2
 5. verify profile test
-6. verify generation preflight
+6. verify generation preflight including USD spend checks
 7. run one controlled paid Veo generation
 8. verify R2 output hash
 9. start the companion
