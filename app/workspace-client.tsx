@@ -25,6 +25,7 @@ type GenerationJob = {
   status: string;
   model_id: string;
   scene_title?: string | null;
+  outputs?: Array<{ asset_id: string; filename: string; r2_key?: string | null }>;
 };
 
 const demoProjects: Project[] = [
@@ -44,6 +45,14 @@ const demoScene: Scene = {
   duration_seconds: 8,
   resolution: "1080p",
 };
+
+const activeGenerationStatuses = new Set([
+  "queued",
+  "submitting",
+  "provider_pending",
+  "downloading_from_provider",
+  "uploading_relay",
+]);
 
 export default function WorkspaceClient() {
   const [projects, setProjects] = useState<Project[]>(demoProjects);
@@ -66,6 +75,17 @@ export default function WorkspaceClient() {
     () => scenes.find((scene) => scene.id === selectedSceneId) ?? scenes[0],
     [scenes, selectedSceneId],
   );
+
+  async function refreshGenerationJobs(projectId = selectedProjectId) {
+    if (backendMode !== "database" || !projectId) return;
+    try {
+      const response = await fetch(`/api/generations?projectId=${encodeURIComponent(projectId)}`, { cache: "no-store" });
+      const data = response.ok ? await response.json() : { jobs: [] };
+      setGenerationJobs(Array.isArray(data.jobs) ? data.jobs : []);
+    } catch {
+      // Keep the previous list during transient polling failures.
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -115,11 +135,16 @@ export default function WorkspaceClient() {
       })
       .catch(() => setSaveState("error"));
 
-    fetch(`/api/generations?projectId=${encodeURIComponent(selectedProjectId)}`, { cache: "no-store" })
-      .then(async (response) => (response.ok ? response.json() : { jobs: [] }))
-      .then((data) => setGenerationJobs(Array.isArray(data.jobs) ? data.jobs : []))
-      .catch(() => setGenerationJobs([]));
+    void refreshGenerationJobs(selectedProjectId);
   }, [backendMode, selectedProjectId]);
+
+  useEffect(() => {
+    if (backendMode !== "database" || !generationJobs.some((job) => activeGenerationStatuses.has(job.status))) return;
+    const timer = window.setInterval(() => {
+      void refreshGenerationJobs();
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [backendMode, selectedProjectId, generationJobs]);
 
   useEffect(() => {
     if (backendMode !== "database" || !selectedSceneId || !prompt.trim()) return;
@@ -179,7 +204,14 @@ export default function WorkspaceClient() {
   }
 
   async function createGeneration() {
-    if (backendMode !== "database" || !selectedProjectId || !selectedSceneId || generationState === "submitting") return;
+    if (
+      backendMode !== "database" ||
+      !selectedProjectId ||
+      !selectedSceneId ||
+      !selectedScene ||
+      !prompt.trim() ||
+      generationState === "submitting"
+    ) return;
 
     if (!pendingGenerationRequestId.current) {
       pendingGenerationRequestId.current = crypto.randomUUID();
@@ -195,16 +227,21 @@ export default function WorkspaceClient() {
           generationRequestId: pendingGenerationRequestId.current,
           projectId: selectedProjectId,
           sceneId: selectedSceneId,
-          modelId: "veo-3.1",
+          modelId: "veo-3.1-generate-preview",
+          promptSnapshot: prompt,
+          aspectRatioSnapshot: selectedScene.aspect_ratio ?? "9:16",
+          durationSecondsSnapshot: selectedScene.duration_seconds ?? 8,
+          resolutionSnapshot: selectedScene.resolution ?? "1080p",
         }),
       });
 
-      if (!response.ok) throw new Error("Failed to create generation job");
       const data = await response.json();
+      if (!response.ok && !data.job) throw new Error("Failed to create generation job");
       const job = data.job as GenerationJob;
       setGenerationJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
-      setGenerationState("queued");
+      setGenerationState(response.ok ? "queued" : "error");
       pendingGenerationRequestId.current = null;
+      void refreshGenerationJobs();
     } catch {
       setGenerationState("error");
     }
@@ -223,7 +260,7 @@ export default function WorkspaceClient() {
         <div className="top-actions">
           <button className="ghost-button">{backendMode === "database" ? "Database connected" : "Demo mode"}</button>
           <button className="ghost-button">Local media: Home PC</button>
-          <button className="profile-button"><span className="status-dot" /> Google Profile A⌄</button>
+          <button className="profile-button"><span className="status-dot" /> Default Google Profile⌄</button>
         </div>
       </header>
 
@@ -272,7 +309,7 @@ export default function WorkspaceClient() {
             <div className="preview-placeholder"><div className="play-ring">▶</div><span>9:16 Preview</span></div>
             <div className="reference-strip">
               <div className="reference-thumb">IMG</div>
-              <div><strong>Reference image</strong><small>Local-first asset slot</small></div>
+              <div><strong>Reference image</strong><small>Image-to-video wiring comes next</small></div>
               <button className="tiny-button">Replace</button>
             </div>
           </div>
@@ -285,23 +322,23 @@ export default function WorkspaceClient() {
               <button className="setting-chip">{selectedScene?.aspect_ratio ?? "9:16"}⌄</button>
               <button className="setting-chip">{selectedScene?.duration_seconds ?? 8} sec⌄</button>
               <button className="setting-chip">{selectedScene?.resolution ?? "1080p"}⌄</button>
-              <button className="generate-button" onClick={createGeneration} disabled={backendMode !== "database" || !selectedSceneId || generationState === "submitting"}>
-                {generationState === "submitting" ? "Creating job…" : generationState === "queued" ? "✓ Job queued" : "▶ Generate"}
+              <button className="generate-button" onClick={createGeneration} disabled={backendMode !== "database" || !selectedSceneId || !prompt.trim() || generationState === "submitting"}>
+                {generationState === "submitting" ? "Submitting…" : generationState === "error" ? "Retry Generate" : "▶ Generate"}
               </button>
             </div>
           </div>
 
           <div className="generations-block">
-            <div className="section-title"><h3>Generation history</h3><button>View all</button></div>
+            <div className="section-title"><h3>Generation history</h3><button onClick={() => void refreshGenerationJobs()}>Refresh</button></div>
             <div className="generation-list">
               {generationJobs.length ? generationJobs.map((job) => (
                 <div className="generation-row" key={job.id}>
                   <span className={`job-dot ${job.status}`} />
                   <div><strong>{job.scene_title ?? selectedScene?.title ?? "Generation"}</strong><small>{job.model_id}</small></div>
-                  <span className={`job-status ${job.status}`}>{job.status}</span>
+                  <span className={`job-status ${job.status}`}>{job.status.replaceAll("_", " ")}</span>
                 </div>
               )) : (
-                <div className="generation-row"><span className="job-dot draft" /><div><strong>No real generations yet</strong><small>Create a durable job now; Veo execution connects in Phase 2.</small></div><span className="job-status draft">Ready</span></div>
+                <div className="generation-row"><span className="job-dot draft" /><div><strong>No generations yet</strong><small>Configure Google, Inngest, PostgreSQL and R2 to run the full durable pipeline.</small></div><span className="job-status draft">Ready</span></div>
               )}
             </div>
           </div>
@@ -310,10 +347,10 @@ export default function WorkspaceClient() {
         <aside className="panel agent-panel">
           <div className="panel-heading"><div><span className="eyebrow">Project-aware</span><h2>Agent</h2></div><span className="agent-badge">Phase 4</span></div>
           <div className="chat-stream">
-            <div className="message agent-message"><strong>Persistence foundation active.</strong><p>Projects, scenes, prompt versions, devices, assets, and idempotent generation jobs are wired to PostgreSQL.</p><div className="tool-list"><span>✓ Project + scene APIs</span><span>✓ Prompt autosave</span><span>✓ Device + asset APIs</span><span>✓ Idempotent generation jobs</span></div></div>
+            <div className="message agent-message"><strong>Veo pipeline wired.</strong><p>Generation jobs now freeze their prompt/settings, dispatch through Inngest, call Veo server-side, poll durable status, and relay completed video to R2.</p><div className="tool-list"><span>✓ Immutable generation snapshot</span><span>✓ Inngest durable worker</span><span>✓ Google Veo adapter</span><span>✓ R2 relay uploader</span></div></div>
           </div>
           <div className="agent-input"><textarea placeholder="Agent will be connected in Phase 4…" disabled /><div><button className="tiny-button" disabled>＋ Asset</button><button className="send-button" disabled>↑</button></div></div>
-          <div className="relay-card"><span className="relay-icon">☁</span><div><strong>Cloud relay planned</strong><small>Phase 2 will execute queued jobs through Veo and land completed outputs in R2 before local-device verification.</small></div></div>
+          <div className="relay-card"><span className="relay-icon">☁</span><div><strong>R2 relay pipeline connected</strong><small>Successful generations become CLOUD_READY only after the MP4 is uploaded and its SHA-256 metadata is persisted.</small></div></div>
         </aside>
       </section>
     </main>
