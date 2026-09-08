@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import AgentPanel from "./agent-panel";
+import StorageControl from "./storage-control";
 
 type Project = { id: string; name: string; description?: string | null; scene_count?: number };
 type Scene = { id: string; project_id: string; title: string; prompt?: string | null; prompt_version?: number | null; aspect_ratio?: string; duration_seconds?: number | null; resolution?: string | null };
@@ -33,6 +34,7 @@ export default function WorkspaceClient() {
   const [backendMode, setBackendMode] = useState<"database" | "demo">("demo");
   const [generationJobs, setGenerationJobs] = useState<GenerationJob[]>([]);
   const [generationState, setGenerationState] = useState<"idle" | "submitting" | "queued" | "error">("idle");
+  const [generationError, setGenerationError] = useState("");
   const [initialFrame, setInitialFrame] = useState<Asset | null>(null);
   const [uploadState, setUploadState] = useState<"idle" | "uploading" | "error">("idle");
   const [profiles, setProfiles] = useState<ApiProfile[]>([]);
@@ -84,6 +86,7 @@ export default function WorkspaceClient() {
   useEffect(() => {
     if (backendMode !== "database" || !selectedProjectId) return;
     setInitialFrame(null);
+    setGenerationError("");
     fetch(`/api/projects/${selectedProjectId}/scenes`, { cache: "no-store" })
       .then(async (response) => { if (!response.ok) throw new Error("Failed to load scenes"); return response.json(); })
       .then((data) => {
@@ -168,7 +171,9 @@ export default function WorkspaceClient() {
 
   async function createGeneration() {
     if (backendMode !== "database" || !selectedProjectId || !selectedSceneId || !selectedScene || !prompt.trim() || generationState === "submitting") return;
-    if (!pendingGenerationRequestId.current) pendingGenerationRequestId.current = crypto.randomUUID(); setGenerationState("submitting");
+    if (!pendingGenerationRequestId.current) pendingGenerationRequestId.current = crypto.randomUUID();
+    setGenerationState("submitting");
+    setGenerationError("");
     try {
       const response = await fetch("/api/generations", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
         generationRequestId: pendingGenerationRequestId.current, projectId: selectedProjectId, sceneId: selectedSceneId,
@@ -176,9 +181,19 @@ export default function WorkspaceClient() {
         aspectRatioSnapshot: selectedScene.aspect_ratio ?? "9:16", durationSecondsSnapshot: selectedScene.duration_seconds ?? 8,
         resolutionSnapshot: selectedScene.resolution ?? "1080p", assetInputs: initialFrame ? [{ assetId: initialFrame.id, role: "initial_frame", sortOrder: 0 }] : [],
       }) });
-      const data = await response.json(); if (!response.ok && !data.job) throw new Error("Failed to create generation job");
-      const job = data.job as GenerationJob; setGenerationJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]); setGenerationState(response.ok ? "queued" : "error"); pendingGenerationRequestId.current = null; void refreshGenerationJobs();
-    } catch { setGenerationState("error"); }
+      const data = await response.json();
+      if (!response.ok && !data.job) {
+        setGenerationError(data.error ?? "Generation blocked");
+        throw new Error(data.error ?? "Failed to create generation job");
+      }
+      const job = data.job as GenerationJob;
+      setGenerationJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
+      setGenerationState(response.ok ? "queued" : "error");
+      pendingGenerationRequestId.current = null;
+      void refreshGenerationJobs();
+    } catch {
+      setGenerationState("error");
+    }
   }
 
   return (
@@ -187,7 +202,6 @@ export default function WorkspaceClient() {
         <div><div className="brand-mark">▶</div><div><h1>Persistent AI Video Studio</h1><p>Your projects stay yours, even when the API profile changes.</p></div></div>
         <div className="top-actions">
           <button className="ghost-button">{backendMode === "database" ? "Database connected" : "Demo mode"}</button>
-          <button className="ghost-button">Local media: Home PC</button>
           <select className="profile-select" value={selectedProfileId} onChange={(event) => void chooseProfile(event.target.value)} disabled={backendMode !== "database" || profileState === "saving"}>
             {!profiles.length && <option value="">Default Google Profile</option>}
             {profiles.filter((profile) => profile.enabled).map((profile) => <option value={profile.id} key={profile.id}>{profile.name}</option>)}
@@ -201,14 +215,14 @@ export default function WorkspaceClient() {
         <aside className="panel sidebar">
           <div className="panel-heading"><div><span className="eyebrow">Workspace</span><h2>Projects</h2></div><button className="icon-button" onClick={createNewProject} disabled={backendMode !== "database"}>＋</button></div>
           <div className="project-list">{projects.map((project) => <button className={`project-card ${project.id === selectedProjectId ? "active" : ""}`} key={project.id} onClick={() => setSelectedProjectId(project.id)}><span className="project-icon">▣</span><span><strong>{project.name}</strong><small>{project.scene_count ?? 0} scenes</small></span></button>)}</div>
-          <div className="storage-card"><div className="storage-top"><span>Local storage</span><strong>Target device</strong></div><div className="meter"><span /></div><small>D:\AI Video Studio</small></div>
+          <StorageControl enabled={backendMode === "database"} />
         </aside>
 
         <section className="panel canvas-panel">
           <div className="panel-heading"><div><span className="eyebrow">{selectedProject?.name ?? "Project"}</span><h2>{selectedScene?.title ?? "No scene yet"}</h2></div><span className="saved-pill">● {saveState === "saving" ? "Saving" : saveState === "error" ? "Save error" : saveState === "demo" ? "Demo" : "Saved"}</span></div>
           <div className="scene-tabs">{scenes.map((scene) => <button key={scene.id} className={scene.id === selectedSceneId ? "active" : ""} onClick={() => { setSelectedSceneId(scene.id); setPrompt(scene.prompt ?? ""); }}>{scene.title}</button>)}<button onClick={createNewScene} disabled={backendMode !== "database"}>＋ Scene</button></div>
           <div className="preview-card"><div className="preview-placeholder"><div className="play-ring">▶</div><span>9:16 Preview</span></div><div className="reference-strip"><div className="reference-thumb">IMG</div><div><strong>{initialFrame?.filename ?? "Initial frame"}</strong><small>{uploadState === "uploading" ? "Uploading to R2…" : uploadState === "error" ? "Upload failed — try again" : initialFrame ? "Ready for image-to-video" : "Optional — choose PNG, JPEG, or WebP"}</small></div><input ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadInitialFrame(file); event.currentTarget.value = ""; }} /><button className="tiny-button" onClick={() => fileInputRef.current?.click()} disabled={backendMode !== "database" || uploadState === "uploading"}>{initialFrame ? "Replace" : "Choose image"}</button></div></div>
-          <div className="prompt-editor"><div className="field-label"><span>Video prompt</span><span>Prompt v{selectedScene?.prompt_version ?? 0}</span></div><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Describe the video scene..." /><div className="settings-row"><button className="setting-chip">Veo 3.1⌄</button><button className="setting-chip">{selectedScene?.aspect_ratio ?? "9:16"}⌄</button><button className="setting-chip">{selectedScene?.duration_seconds ?? 8} sec⌄</button><button className="setting-chip">{selectedScene?.resolution ?? "1080p"}⌄</button><button className="generate-button" onClick={createGeneration} disabled={backendMode !== "database" || !selectedSceneId || !prompt.trim() || generationState === "submitting" || uploadState === "uploading"}>{generationState === "submitting" ? "Submitting…" : generationState === "error" ? "Retry Generate" : initialFrame ? "▶ Generate from image" : "▶ Generate"}</button></div><div className="execution-note">Execution profile: <strong>{selectedProfile?.name ?? "Default Google Profile"}</strong>. Switching profiles does not change project data.</div></div>
+          <div className="prompt-editor"><div className="field-label"><span>Video prompt</span><span>Prompt v{selectedScene?.prompt_version ?? 0}</span></div><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Describe the video scene..." /><div className="settings-row"><button className="setting-chip">Veo 3.1⌄</button><button className="setting-chip">{selectedScene?.aspect_ratio ?? "9:16"}⌄</button><button className="setting-chip">{selectedScene?.duration_seconds ?? 8} sec⌄</button><button className="setting-chip">{selectedScene?.resolution ?? "1080p"}⌄</button><button className="generate-button" onClick={createGeneration} disabled={backendMode !== "database" || !selectedSceneId || !prompt.trim() || generationState === "submitting" || uploadState === "uploading"}>{generationState === "submitting" ? "Submitting…" : generationState === "error" ? "Retry Generate" : initialFrame ? "▶ Generate from image" : "▶ Generate"}</button></div><div className="execution-note">Execution profile: <strong>{selectedProfile?.name ?? "Default Google Profile"}</strong>. Switching profiles does not change project data.</div>{generationError && <div className="generation-error">Generation blocked: {generationError}</div>}</div>
           <div className="generations-block"><div className="section-title"><h3>Generation history</h3><button onClick={() => void refreshGenerationJobs()}>Refresh</button></div><div className="generation-list">{generationJobs.length ? generationJobs.map((job) => <div className="generation-row" key={job.id}><span className={`job-dot ${job.status}`} /><div><strong>{job.scene_title ?? selectedScene?.title ?? "Generation"}</strong><small>{job.model_id}{job.requested_api_profile_id ? " · profile locked" : ""}</small></div><span className={`job-status ${job.status}`}>{job.status.replaceAll("_", " ")}</span></div>) : <div className="generation-row"><span className="job-dot draft" /><div><strong>No generations yet</strong><small>Configure Google, Inngest, PostgreSQL and R2 to run the full durable pipeline.</small></div><span className="job-status draft">Ready</span></div>}</div></div>
         </section>
 
