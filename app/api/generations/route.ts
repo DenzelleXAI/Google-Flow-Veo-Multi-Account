@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { dbConfigured } from "@/lib/db";
-import { createGenerationJob, listRecentGenerationJobs, updateGenerationStatus } from "@/lib/generations";
+import { createGenerationJob, listRecentGenerationJobs, updateGenerationStatus, type GenerationAssetInput } from "@/lib/generations";
 import { inngest } from "@/lib/inngest";
 import { validateVeoSettings } from "@/lib/model-registry";
+
+const allowedRoles = new Set<GenerationAssetInput["role"]>(["initial_frame", "last_frame", "reference_asset"]);
 
 export async function GET(request: Request) {
   if (!dbConfigured) {
@@ -48,6 +50,36 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: capabilityError }, { status: 400 });
     }
 
+    const assetInputs: GenerationAssetInput[] = [];
+    if (Array.isArray(body.assetInputs)) {
+      for (const [index, raw] of body.assetInputs.entries()) {
+        if (!raw || typeof raw.assetId !== "string" || !allowedRoles.has(raw.role)) {
+          return NextResponse.json({ error: `Invalid assetInputs[${index}]` }, { status: 400 });
+        }
+        assetInputs.push({
+          assetId: raw.assetId,
+          role: raw.role,
+          sortOrder: Number.isInteger(raw.sortOrder) ? raw.sortOrder : index,
+        });
+      }
+    }
+
+    const initialCount = assetInputs.filter((item) => item.role === "initial_frame").length;
+    const lastCount = assetInputs.filter((item) => item.role === "last_frame").length;
+    const referenceCount = assetInputs.filter((item) => item.role === "reference_asset").length;
+    if (initialCount > 1 || lastCount > 1 || referenceCount > 3) {
+      return NextResponse.json({ error: "Use at most one initial frame, one last frame, and three reference images" }, { status: 400 });
+    }
+    if (lastCount && !initialCount) {
+      return NextResponse.json({ error: "A last frame requires an initial frame" }, { status: 400 });
+    }
+    if (referenceCount && durationSecondsSnapshot !== 8) {
+      return NextResponse.json({ error: "Reference-image generation requires an 8-second duration" }, { status: 400 });
+    }
+    if (referenceCount && body.modelId.includes("lite")) {
+      return NextResponse.json({ error: "Veo 3.1 Lite does not support reference images" }, { status: 400 });
+    }
+
     const result = await createGenerationJob({
       generationRequestId: body.generationRequestId,
       projectId: body.projectId,
@@ -59,6 +91,7 @@ export async function POST(request: Request) {
       aspectRatioSnapshot,
       durationSecondsSnapshot,
       resolutionSnapshot,
+      assetInputs,
     });
 
     if (result.created) {
