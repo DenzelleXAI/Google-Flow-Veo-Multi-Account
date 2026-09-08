@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { dbConfigured } from "@/lib/db";
 import { createGenerationJob, listRecentGenerationJobs, updateGenerationStatus } from "@/lib/generations";
 import { inngest } from "@/lib/inngest";
+import { validateVeoSettings } from "@/lib/model-registry";
 
 export async function GET(request: Request) {
   if (!dbConfigured) {
@@ -33,6 +34,20 @@ export async function POST(request: Request) {
       }
     }
 
+    const aspectRatioSnapshot = typeof body.aspectRatioSnapshot === "string" ? body.aspectRatioSnapshot : "9:16";
+    const durationSecondsSnapshot = Number.isInteger(body.durationSecondsSnapshot) ? body.durationSecondsSnapshot : 8;
+    const resolutionSnapshot = typeof body.resolutionSnapshot === "string" ? body.resolutionSnapshot : "720p";
+
+    const capabilityError = validateVeoSettings({
+      modelId: body.modelId,
+      aspectRatio: aspectRatioSnapshot,
+      durationSeconds: durationSecondsSnapshot,
+      resolution: resolutionSnapshot,
+    });
+    if (capabilityError) {
+      return NextResponse.json({ error: capabilityError }, { status: 400 });
+    }
+
     const result = await createGenerationJob({
       generationRequestId: body.generationRequestId,
       projectId: body.projectId,
@@ -41,9 +56,9 @@ export async function POST(request: Request) {
       targetDeviceId: typeof body.targetDeviceId === "string" ? body.targetDeviceId : null,
       modelId: body.modelId,
       promptSnapshot: body.promptSnapshot,
-      aspectRatioSnapshot: typeof body.aspectRatioSnapshot === "string" ? body.aspectRatioSnapshot : "9:16",
-      durationSecondsSnapshot: Number.isInteger(body.durationSecondsSnapshot) ? body.durationSecondsSnapshot : null,
-      resolutionSnapshot: typeof body.resolutionSnapshot === "string" ? body.resolutionSnapshot : null,
+      aspectRatioSnapshot,
+      durationSecondsSnapshot,
+      resolutionSnapshot,
     });
 
     if (result.created) {
