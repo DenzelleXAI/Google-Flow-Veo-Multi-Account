@@ -30,6 +30,15 @@ export async function PATCH(request: Request) {
     const monthlyGenerationLimit = Number.isInteger(body.monthlyGenerationLimit)
       ? Number(body.monthlyGenerationLimit)
       : undefined;
+    const dailySpendLimitUsd = Number.isFinite(body.dailySpendLimitUsd)
+      ? Number(body.dailySpendLimitUsd)
+      : undefined;
+    const monthlySpendLimitUsd = Number.isFinite(body.monthlySpendLimitUsd)
+      ? Number(body.monthlySpendLimitUsd)
+      : undefined;
+    const perRequestSpendLimitUsd = Number.isFinite(body.perRequestSpendLimitUsd)
+      ? Number(body.perRequestSpendLimitUsd)
+      : undefined;
     const minFreeDiskBytes = Number.isFinite(body.minFreeDiskBytes)
       ? Number(body.minFreeDiskBytes)
       : undefined;
@@ -50,6 +59,31 @@ export async function PATCH(request: Request) {
     ) {
       return NextResponse.json({ error: "Daily limit cannot exceed monthly limit" }, { status: 400 });
     }
+
+    for (const [name, value] of [
+      ["dailySpendLimitUsd", dailySpendLimitUsd],
+      ["monthlySpendLimitUsd", monthlySpendLimitUsd],
+      ["perRequestSpendLimitUsd", perRequestSpendLimitUsd],
+    ] as const) {
+      if (value !== undefined && value <= 0) {
+        return NextResponse.json({ error: `${name} must be greater than 0` }, { status: 400 });
+      }
+    }
+
+    if (
+      dailySpendLimitUsd !== undefined &&
+      monthlySpendLimitUsd !== undefined &&
+      dailySpendLimitUsd > monthlySpendLimitUsd
+    ) {
+      return NextResponse.json({ error: "Daily spend limit cannot exceed monthly spend limit" }, { status: 400 });
+    }
+    if (
+      perRequestSpendLimitUsd !== undefined &&
+      dailySpendLimitUsd !== undefined &&
+      perRequestSpendLimitUsd > dailySpendLimitUsd
+    ) {
+      return NextResponse.json({ error: "Per-request spend limit cannot exceed daily spend limit" }, { status: 400 });
+    }
     if (minFreeDiskBytes !== undefined && minFreeDiskBytes < 0) {
       return NextResponse.json({ error: "minFreeDiskBytes cannot be negative" }, { status: 400 });
     }
@@ -64,6 +98,9 @@ export async function PATCH(request: Request) {
           : undefined,
       dailyGenerationLimit,
       monthlyGenerationLimit,
+      dailySpendLimitUsd,
+      monthlySpendLimitUsd,
+      perRequestSpendLimitUsd,
       minFreeDiskBytes,
       deviceStaleAfterSeconds,
     });
