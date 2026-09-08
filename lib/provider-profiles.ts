@@ -70,15 +70,50 @@ export async function createEncryptedGoogleProfile(name: string, apiKey: string)
 export async function setGoogleProfileEnabled(profileId: string, enabled: boolean) {
   const sql = requireDb();
   const workspace = await ensurePersonalWorkspace();
-  const rows = await sql`
-    update api_profiles
-    set enabled = ${enabled}, updated_at = now()
-    where id = ${profileId}
-      and workspace_id = ${workspace.id}
-      and provider = 'google'
-    returning id, workspace_id, name, provider, credential_source, enabled, created_at, updated_at
-  `;
-  return (rows[0] as unknown as ApiProfileRecord | undefined) ?? null;
+
+  return sql.begin(async (tx) => {
+    const rows = await tx`
+      update api_profiles
+      set enabled = ${enabled}, updated_at = now()
+      where id = ${profileId}
+        and workspace_id = ${workspace.id}
+        and provider = 'google'
+      returning id, workspace_id, name, provider, credential_source, enabled, created_at, updated_at
+    `;
+
+    const profile = (rows[0] as unknown as ApiProfileRecord | undefined) ?? null;
+    if (!profile || enabled) return profile;
+
+    const settings = await tx`
+      select default_api_profile_id
+      from workspace_settings
+      where workspace_id = ${workspace.id}
+      limit 1
+    `;
+
+    if (settings[0]?.default_api_profile_id === profileId) {
+      const fallback = await tx`
+        select id
+        from api_profiles
+        where workspace_id = ${workspace.id}
+          and provider = 'google'
+          and enabled = true
+          and id <> ${profileId}
+        order by credential_source = 'environment' desc, created_at asc
+        limit 1
+      `;
+
+      await tx`
+        insert into workspace_settings (workspace_id, default_api_profile_id)
+        values (${workspace.id}, ${fallback[0]?.id ?? null})
+        on conflict (workspace_id) do update
+          set default_api_profile_id = excluded.default_api_profile_id,
+              updated_at = now()
+      `;
+    }
+
+    return profile;
+  });
 }
 
 export async function setDefaultGoogleProfile(profileId: string) {
@@ -132,7 +167,6 @@ async function loadProfile(profileId: string) {
 }
 
 export async function resolveGoogleProfile(requestedProfileId?: string | null) {
-  const sql = requireDb();
   let profile: any = null;
 
   if (requestedProfileId) {
