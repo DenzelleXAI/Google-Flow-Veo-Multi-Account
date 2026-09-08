@@ -98,10 +98,30 @@ create table if not exists workspace_settings (
   workspace_id uuid primary key references workspaces(id) on delete cascade,
   default_api_profile_id uuid references api_profiles(id),
   default_target_device_id uuid references devices(id),
-  daily_generation_limit integer,
-  monthly_generation_limit integer,
+  daily_generation_limit integer not null default 10,
+  monthly_generation_limit integer not null default 100,
+  min_free_disk_bytes bigint not null default 32212254720,
+  device_stale_after_seconds integer not null default 300,
   updated_at timestamptz not null default now()
 );
+
+alter table workspace_settings add column if not exists daily_generation_limit integer;
+alter table workspace_settings add column if not exists monthly_generation_limit integer;
+alter table workspace_settings add column if not exists min_free_disk_bytes bigint;
+alter table workspace_settings add column if not exists device_stale_after_seconds integer;
+update workspace_settings
+set daily_generation_limit = coalesce(daily_generation_limit, 10),
+    monthly_generation_limit = coalesce(monthly_generation_limit, 100),
+    min_free_disk_bytes = coalesce(min_free_disk_bytes, 32212254720),
+    device_stale_after_seconds = coalesce(device_stale_after_seconds, 300);
+alter table workspace_settings alter column daily_generation_limit set default 10;
+alter table workspace_settings alter column daily_generation_limit set not null;
+alter table workspace_settings alter column monthly_generation_limit set default 100;
+alter table workspace_settings alter column monthly_generation_limit set not null;
+alter table workspace_settings alter column min_free_disk_bytes set default 32212254720;
+alter table workspace_settings alter column min_free_disk_bytes set not null;
+alter table workspace_settings alter column device_stale_after_seconds set default 300;
+alter table workspace_settings alter column device_stale_after_seconds set not null;
 
 create table if not exists agent_threads (
   id uuid primary key default gen_random_uuid(),
@@ -183,4 +203,5 @@ create index if not exists idx_agent_messages_thread on agent_messages(thread_id
 create index if not exists idx_jobs_status on generation_jobs(status);
 create index if not exists idx_job_assets_job on generation_job_assets(generation_job_id);
 create index if not exists idx_attempts_job on generation_attempts(generation_job_id);
+create index if not exists idx_attempts_started on generation_attempts(started_at);
 create index if not exists idx_asset_locations_device on asset_locations(device_id);
