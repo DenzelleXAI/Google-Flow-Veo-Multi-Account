@@ -140,6 +140,28 @@ create table if not exists agent_messages (
   created_at timestamptz not null default now()
 );
 
+create table if not exists research_sessions (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references projects(id) on delete cascade,
+  api_profile_id uuid references api_profiles(id) on delete set null,
+  query text not null,
+  mode text not null default 'search',
+  summary text not null default '',
+  search_queries jsonb,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists research_sources (
+  id uuid primary key default gen_random_uuid(),
+  research_session_id uuid not null references research_sessions(id) on delete cascade,
+  url text not null,
+  title text,
+  citation_start integer,
+  citation_end integer,
+  metadata jsonb,
+  retrieved_at timestamptz not null default now()
+);
+
 create table if not exists generation_jobs (
   id uuid primary key default gen_random_uuid(),
   generation_request_id uuid not null,
@@ -200,6 +222,8 @@ create index if not exists idx_projects_workspace on projects(workspace_id);
 create index if not exists idx_scenes_project on scenes(project_id);
 create index if not exists idx_assets_project on assets(project_id);
 create index if not exists idx_agent_messages_thread on agent_messages(thread_id, created_at);
+create index if not exists idx_research_sessions_project on research_sessions(project_id, created_at desc);
+create index if not exists idx_research_sources_session on research_sources(research_session_id);
 create index if not exists idx_jobs_status on generation_jobs(status);
 create index if not exists idx_job_assets_job on generation_job_assets(generation_job_id);
 create index if not exists idx_attempts_job on generation_attempts(generation_job_id);
