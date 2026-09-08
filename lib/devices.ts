@@ -67,6 +67,7 @@ export async function createAsset(input: {
   projectId: string;
   type: string;
   filename: string;
+  mimeType?: string | null;
   relativePath?: string | null;
   r2Key?: string | null;
   sha256?: string | null;
@@ -79,17 +80,37 @@ export async function createAsset(input: {
 
   const rows = await sql`
     insert into assets (
-      project_id, type, filename, relative_path, r2_key, sha256,
+      project_id, type, filename, mime_type, relative_path, r2_key, sha256,
       file_size_bytes, width, height, duration_seconds
     ) values (
-      ${input.projectId}, ${input.type}, ${input.filename}, ${input.relativePath ?? null},
-      ${input.r2Key ?? null}, ${input.sha256 ?? null}, ${input.fileSizeBytes ?? null},
-      ${input.width ?? null}, ${input.height ?? null}, ${input.durationSeconds ?? null}
+      ${input.projectId}, ${input.type}, ${input.filename}, ${input.mimeType ?? null},
+      ${input.relativePath ?? null}, ${input.r2Key ?? null}, ${input.sha256 ?? null},
+      ${input.fileSizeBytes ?? null}, ${input.width ?? null}, ${input.height ?? null},
+      ${input.durationSeconds ?? null}
     )
     returning *
   `;
 
   return rows[0];
+}
+
+export async function listProjectAssets(projectId: string) {
+  const sql = requireDb();
+  return sql`
+    select id, project_id, type, filename, mime_type, relative_path, r2_key,
+      sha256, file_size_bytes, width, height, duration_seconds, created_at
+    from assets
+    where project_id = ${projectId}
+    order by created_at desc
+  `;
+}
+
+export async function getAsset(assetId: string) {
+  const sql = requireDb();
+  const rows = await sql`
+    select * from assets where id = ${assetId} limit 1
+  `;
+  return rows[0] ?? null;
 }
 
 export async function upsertAssetLocation(input: {
