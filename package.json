@@ -8,6 +8,7 @@
     "start": "next start",
     "test": "node --experimental-strip-types --test tests/*.test.mjs",
     "typecheck": "tsc --noEmit",
+    "smoke:local": "node scripts/smoke-local.mjs",
     "db:bootstrap": "node scripts/db-bootstrap.mjs",
     "db:check": "node scripts/db-check.mjs",
     "db:local:up": "docker compose up -d postgres",
