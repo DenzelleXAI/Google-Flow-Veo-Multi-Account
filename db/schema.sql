@@ -60,6 +60,7 @@ create table if not exists assets (
   r2_key text,
   relay_delete_after timestamptz,
   relay_deleted_at timestamptz,
+  veo_reference_refreshed_at timestamptz,
   sha256 text,
   file_size_bytes bigint,
   width integer,
@@ -71,6 +72,7 @@ create table if not exists assets (
 alter table assets add column if not exists mime_type text;
 alter table assets add column if not exists relay_delete_after timestamptz;
 alter table assets add column if not exists relay_deleted_at timestamptz;
+alter table assets add column if not exists veo_reference_refreshed_at timestamptz;
 
 create table if not exists asset_locations (
   id uuid primary key default gen_random_uuid(),
