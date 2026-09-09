@@ -5,6 +5,13 @@ const checks = [
   { name: "Asset/media persistence", path: "/api/dev/smoke-library" },
 ];
 
+function formatCheck(name, value) {
+  if (name === "providerCalled") {
+    return `${value === false ? "OK" : "FAIL"}  providerNotCalled`;
+  }
+  return `${value ? "OK" : "FAIL"}  ${name}`;
+}
+
 try {
   for (const check of checks) {
     const response = await fetch(`${baseUrl}${check.path}`, { method: "POST" });
@@ -18,7 +25,7 @@ try {
 
     console.log(`${check.name}: OK`);
     for (const [name, value] of Object.entries(body.checks ?? {})) {
-      console.log(`${value ? "OK" : "FAIL"}  ${name}`);
+      console.log(formatCheck(name, value));
     }
   }
 
