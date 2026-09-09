@@ -229,7 +229,6 @@ export const monitorVeoGeneration = inngest.createFunction(
     id: "monitor-veo-generation",
     name: "Monitor and relay Veo generation",
     triggers: { event: "video/generation.monitor" },
-    idempotency: "event.data.attemptId",
     retries: 4,
   },
   async ({ event, step }) => {
@@ -246,6 +245,31 @@ export const monitorVeoGeneration = inngest.createFunction(
 
     if (["cloud_ready", "local_confirmed", "cancelled"].includes(job.status)) {
       return { jobId, status: job.status, skipped: true };
+    }
+
+    // A previous monitor run may have persisted the output asset and then
+    // failed before writing the terminal job/attempt statuses. In that case,
+    // reconcile from our durable output instead of downloading and storing a
+    // duplicate asset.
+    if (job.outputs.length > 0) {
+      const existingOutput = job.outputs[job.outputs.length - 1];
+      await step.run("reconcile-existing-output", async () => {
+        await updateAttempt({
+          attemptId,
+          status: "completed",
+          errorCode: null,
+          errorMessage: null,
+          completed: true,
+        });
+        await updateGenerationStatus(jobId, "cloud_ready");
+      });
+      return {
+        jobId,
+        status: "cloud_ready",
+        assetId: existingOutput.asset_id,
+        r2Key: existingOutput.r2_key,
+        reconciled: true,
+      };
     }
 
     if (job.generation_mode === "extend") {
