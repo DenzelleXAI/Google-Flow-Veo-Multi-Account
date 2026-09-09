@@ -84,6 +84,12 @@ async function verifyRequiredSchema() {
     from workspace_settings
     limit 0
   `;
+
+  await sql`
+    select r2_key, relay_delete_after, relay_deleted_at
+    from assets
+    limit 0
+  `;
 }
 
 export async function getSystemHealth(deep = false): Promise<SystemHealth> {
