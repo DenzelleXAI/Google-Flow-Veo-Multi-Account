@@ -17,7 +17,9 @@
     "db:local:reset": "docker compose down -v && docker compose up -d postgres",
     "db:local:bootstrap": "node scripts/db-local-bootstrap.mjs",
     "db:local:check": "node scripts/db-local-check.mjs",
-    "companion": "node companion/index.mjs"
+    "companion": "node companion/index.mjs",
+    "companion:windows:install": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File companion/windows/install.ps1",
+    "companion:windows:uninstall": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File companion/windows/uninstall.ps1"
   },
   "dependencies": {
     "@ai-sdk/google": "4.0.64",
