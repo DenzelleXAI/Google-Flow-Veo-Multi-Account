@@ -2,7 +2,7 @@ import { HeadBucketCommand } from "@aws-sdk/client-s3";
 import { GoogleGenAI } from "@google/genai";
 import { dbConfigured, requireDb } from "./db";
 import { resolveGoogleProfile } from "./provider-profiles";
-import { createR2Client } from "./r2";
+import { createR2Client, relayConfiguration } from "./r2";
 
 type HealthState = "ready" | "missing" | "error" | "unchecked";
 
@@ -103,6 +103,7 @@ async function verifyRequiredSchema() {
 
 export async function getSystemHealth(deep = false): Promise<SystemHealth> {
   const envGoogleConfigured = hasEnvironmentGoogleCredential();
+  const relay = relayConfiguration();
 
   const checks: SystemHealth["checks"] = {
     database: {
@@ -118,10 +119,10 @@ export async function getSystemHealth(deep = false): Promise<SystemHealth> {
           : "No server-side Google credential or database profile can be resolved.",
     },
     r2: {
-      state: configured("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET") ? "unchecked" : "missing",
-      detail: configured("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET")
-        ? "R2 relay configuration is present."
-        : "R2 relay configuration is incomplete.",
+      state: relay.ready ? "unchecked" : "missing",
+      detail: relay.ready
+        ? `${relay.mode === "custom" ? "Custom S3-compatible" : "Cloudflare R2"} relay configuration is present.`
+        : `R2/S3 relay configuration is incomplete. Missing: ${relay.missing.join(", ")}.`,
     },
     inngest: {
       state: configured("INNGEST_EVENT_KEY", "INNGEST_SIGNING_KEY") ? "ready" : "missing",
@@ -139,7 +140,7 @@ export async function getSystemHealth(deep = false): Promise<SystemHealth> {
       state: configured("COMPANION_TOKEN") ? "ready" : "missing",
       detail: configured("COMPANION_TOKEN")
         ? "Desktop companion authentication is configured."
-        : "COMPANION_TOKEN is missing; cloud generation can still complete to R2.",
+        : "COMPANION_TOKEN is missing; cloud generation can still complete to the relay.",
     },
   };
 
@@ -183,7 +184,10 @@ export async function getSystemHealth(deep = false): Promise<SystemHealth> {
     try {
       const { client, bucket } = createR2Client();
       await client.send(new HeadBucketCommand({ Bucket: bucket }));
-      checks.r2 = { state: "ready", detail: "R2 bucket is reachable with the configured credentials." };
+      checks.r2 = {
+        state: "ready",
+        detail: `${relay.mode === "custom" ? "S3-compatible" : "Cloudflare R2"} relay bucket is reachable with the configured credentials.`,
+      };
     } catch (error) {
       checks.r2 = { state: "error", detail: safeError(error) };
     }
