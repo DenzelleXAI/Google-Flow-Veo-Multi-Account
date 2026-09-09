@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { requireDb } from "@/lib/db";
+import { assertExtensionSourceFresh } from "@/lib/extensions";
 import { createGenerationJob, GenerationSafetyError } from "@/lib/generations";
 import { ensurePersonalWorkspace } from "@/lib/workspace";
 
@@ -72,11 +73,12 @@ export async function POST() {
 
     const outputRows = await sql`
       insert into assets (
-        project_id, type, filename, mime_type, r2_key, sha256,
-        file_size_bytes, duration_seconds, veo_reference_refreshed_at
+        project_id, type, filename, mime_type, r2_key, relay_delete_after,
+        sha256, file_size_bytes, duration_seconds, veo_reference_refreshed_at
       ) values (
         ${projectId}, 'GENERATED_VIDEO', 'smoke-base.mp4', 'video/mp4',
-        ${`smoke/${first.job.id}/base.mp4`}, ${"a".repeat(64)}, 1024, 4, now()
+        ${`smoke/${first.job.id}/base.mp4`}, now() + interval '24 hours',
+        ${"a".repeat(64)}, 1024, 4, now()
       )
       returning id
     `;
@@ -86,6 +88,16 @@ export async function POST() {
       insert into generation_outputs (generation_job_id, asset_id)
       values (${first.job.id}, ${outputAssetId})
     `;
+
+    await assertExtensionSourceFresh(first.job.id);
+    const pinRows = await sql`
+      select relay_delete_after >= now() + interval '47 hours' as pinned
+      from assets
+      where id = ${outputAssetId}
+      limit 1
+    `;
+    const extensionSourcePinned = Boolean(pinRows[0]?.pinned);
+    if (!extensionSourcePinned) throw new Error("Extension source relay pin verification failed.");
 
     const extension = await createGenerationJob({
       generationRequestId: randomUUID(),
@@ -201,6 +213,7 @@ export async function POST() {
         sceneCrud: true,
         promptVersionPersistence: Boolean(promptRows[0]?.id),
         generationIdempotency: true,
+        extensionSourcePinned,
         extensionLineage,
         extensionLimit,
         providerCalled: false,
