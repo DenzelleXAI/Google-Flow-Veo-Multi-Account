@@ -189,6 +189,10 @@ create table if not exists generation_jobs (
   scene_id uuid references scenes(id) on delete set null,
   requested_api_profile_id uuid references api_profiles(id),
   target_device_id uuid references devices(id),
+  parent_generation_job_id uuid references generation_jobs(id) on delete set null,
+  generation_mode text not null default 'generate',
+  extension_depth integer not null default 0,
+  expected_output_duration_seconds integer,
   model_id text not null,
   prompt_snapshot text not null default '',
   aspect_ratio_snapshot text not null default '9:16',
@@ -208,6 +212,18 @@ alter table generation_jobs add column if not exists duration_seconds_snapshot i
 alter table generation_jobs add column if not exists resolution_snapshot text;
 alter table generation_jobs add column if not exists estimated_cost_usd numeric(10,4);
 alter table generation_jobs add column if not exists pricing_version text;
+alter table generation_jobs add column if not exists parent_generation_job_id uuid references generation_jobs(id) on delete set null;
+alter table generation_jobs add column if not exists generation_mode text;
+alter table generation_jobs add column if not exists extension_depth integer;
+alter table generation_jobs add column if not exists expected_output_duration_seconds integer;
+update generation_jobs
+set generation_mode = coalesce(generation_mode, 'generate'),
+    extension_depth = coalesce(extension_depth, 0),
+    expected_output_duration_seconds = coalesce(expected_output_duration_seconds, duration_seconds_snapshot);
+alter table generation_jobs alter column generation_mode set default 'generate';
+alter table generation_jobs alter column generation_mode set not null;
+alter table generation_jobs alter column extension_depth set default 0;
+alter table generation_jobs alter column extension_depth set not null;
 
 create table if not exists generation_job_assets (
   id uuid primary key default gen_random_uuid(),
@@ -250,6 +266,7 @@ create index if not exists idx_research_sessions_project on research_sessions(pr
 create index if not exists idx_research_sources_session on research_sources(research_session_id);
 create index if not exists idx_jobs_status on generation_jobs(status);
 create index if not exists idx_jobs_cost_window on generation_jobs(workspace_id, created_at, estimated_cost_usd);
+create index if not exists idx_jobs_parent on generation_jobs(parent_generation_job_id);
 create index if not exists idx_job_assets_job on generation_job_assets(generation_job_id);
 create index if not exists idx_attempts_job on generation_attempts(generation_job_id);
 create index if not exists idx_attempts_started on generation_attempts(started_at);
