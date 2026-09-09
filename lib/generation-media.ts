@@ -83,7 +83,7 @@ export async function getGenerationMediaState(jobId: string) {
         al.last_seen_at
       from asset_locations al
       join devices d on d.id = al.device_id
-      where al.asset_id = any(${assetIds})
+      where al.asset_id = any(${assetIds}::uuid[])
         and d.workspace_id = ${workspace.id}
       order by d.name asc
     `;
