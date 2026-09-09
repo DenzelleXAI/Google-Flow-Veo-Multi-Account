@@ -1,6 +1,6 @@
 # Local Development Without Supabase
 
-Supabase is optional. The application only requires a PostgreSQL-compatible `DATABASE_URL`, so local development can run entirely against Docker Postgres.
+Supabase is optional. The application requires PostgreSQL, not a Supabase-specific SDK, so local development can run entirely against Docker Postgres.
 
 ## Requirements
 
@@ -8,15 +8,31 @@ Supabase is optional. The application only requires a PostgreSQL-compatible `DAT
 - npm
 - Docker Desktop with `docker compose`
 
-## 1. Start PostgreSQL
+## Fastest path
+
+After cloning and installing dependencies:
 
 ```bash
-npm run db:local:up
+npm install
+npm run dev:local
 ```
 
-The local database listens on `127.0.0.1:54329` so it is less likely to collide with an existing PostgreSQL installation.
+`dev:local` will:
 
-Local credentials are development-only:
+1. create `.env.local` from `.env.local.example` **only if `.env.local` does not already exist**
+2. start the local PostgreSQL 16 container
+3. wait for the PostgreSQL health check
+4. apply `db/schema.sql`
+5. verify the required schema
+6. start Next.js on `http://localhost:3000`
+
+It never overwrites an existing `.env.local`.
+
+## Local database details
+
+The included Docker database listens on `127.0.0.1:54329` to reduce conflicts with an existing PostgreSQL installation.
+
+Development-only credentials:
 
 ```text
 Database: flow_studio
@@ -25,85 +41,82 @@ Password: flow_local_dev
 Port:     54329
 ```
 
-## 2. Create `.env.local`
-
-Copy `.env.local.example` to `.env.local`.
-
-Windows PowerShell:
-
-```powershell
-Copy-Item .env.local.example .env.local
-```
-
-Command Prompt:
-
-```cmd
-copy .env.local.example .env.local
-```
-
-macOS/Linux:
-
-```bash
-cp .env.local.example .env.local
-```
-
-The default local connection is:
+Default local connection:
 
 ```env
 DATABASE_URL=postgres://flow:flow_local_dev@127.0.0.1:54329/flow_studio
 DATABASE_SSL=false
 ```
 
-## 3. Apply the schema
+## Manual setup commands
+
+If you prefer individual steps:
 
 ```bash
+node scripts/ensure-local-env.mjs
+npm run db:local:up
 npm run db:local:bootstrap
-```
-
-The bootstrap script applies `db/schema.sql` using the local Docker database and disables SSL for this local connection only.
-
-## 4. Verify the database
-
-With `.env.local` loaded into your shell, or by setting `LOCAL_DATABASE_URL`, run:
-
-```bash
-npm run db:check
-```
-
-Expected output includes:
-
-```text
-Database connection: OK
-Schema tables: 17/17 present
-```
-
-## 5. Start the app
-
-```bash
+npm run db:local:check
 npm run dev
 ```
 
-Open:
+Useful database commands:
 
-```text
-http://localhost:3000
+```bash
+npm run db:local:up
+npm run db:local:bootstrap
+npm run db:local:check
+npm run db:local:down
 ```
 
-Projects, scenes, prompt versions, devices, settings, assets metadata, and other PostgreSQL-backed state can now be developed without Supabase.
+## Local non-billable smoke test
 
-Paid generation remains intentionally blocked until Google, R2, and Inngest credentials are configured.
-
-## 6. Local API/database smoke test
-
-With the dev server running:
+With the local development server running:
 
 ```bash
 npm run smoke:local
 ```
 
-This exercises a temporary project, scene, prompt version, and generation-idempotency record against the local PostgreSQL database, verifies the records can be read, and deletes the temporary project afterward.
+The smoke route is disabled in production and verifies temporary PostgreSQL records for:
 
-The smoke endpoint is disabled in production builds.
+- workspace persistence
+- project and scene CRUD
+- prompt-version persistence
+- generation request idempotency
+- generated-video metadata
+- extension-source R2 pin semantics
+- extension parent/child lineage
+- +7 second expected-duration math
+- 20-extension hard stop
+
+The smoke path does **not** call Google, Veo, R2, or Inngest Cloud and cleans its temporary project afterward.
+
+## What works without provider credentials
+
+With only local PostgreSQL configured you can work on and test:
+
+- persistent projects
+- scenes
+- prompt versions/autosave
+- generation settings
+- devices/settings metadata
+- budget settings
+- profile metadata UI
+- Agent/research persistence structure
+- generation idempotency
+- extension lineage/state rules
+- local database health checks
+
+Paid Generate/Extend actions intentionally fail closed until Google, R2, and Inngest are configured.
+
+## Useful app routes
+
+```text
+/             Workspace
+/extensions   Veo extension manager + non-billable extension preflight
+/setup        Infrastructure health + generation preflight
+/profiles     Google profile manager
+```
 
 ## Reset the local database
 
@@ -122,6 +135,6 @@ npm run db:local:down
 
 ## Generic cloud PostgreSQL later
 
-No Supabase-specific SDK is used by the application. Any compatible PostgreSQL provider can be used later by replacing `DATABASE_URL`, including Neon or another managed PostgreSQL service.
+No Supabase-specific client is used by the application. Any compatible PostgreSQL provider can replace the local connection simply by changing `DATABASE_URL`, including Neon or another managed PostgreSQL service.
 
-For a cloud database, normally remove `DATABASE_SSL=false` so TLS is required by `scripts/db-bootstrap.mjs` and the server database client.
+For a cloud database, normally remove `DATABASE_SSL=false` so TLS is required by the server database client and bootstrap tooling.
