@@ -5,15 +5,22 @@ export type VeoImageInput = {
   mimeType: string;
 };
 
+export type VeoVideoInput = {
+  bytes: Buffer;
+  mimeType: string;
+};
+
 export type VeoGenerateInput = {
   apiKey: string;
   modelId: string;
   prompt: string;
   aspectRatio?: string | null;
   resolution?: string | null;
+  durationSeconds?: number | null;
   initialFrame?: VeoImageInput | null;
   lastFrame?: VeoImageInput | null;
   referenceImages?: VeoImageInput[];
+  extensionVideo?: VeoVideoInput | null;
 };
 
 export function createVeoClient(apiKey: string) {
@@ -27,20 +34,31 @@ function toSdkImage(image: VeoImageInput) {
   };
 }
 
+function toSdkVideo(video: VeoVideoInput) {
+  return {
+    videoBytes: video.bytes.toString("base64"),
+    mimeType: video.mimeType,
+  };
+}
+
 export async function submitVeoGeneration(input: VeoGenerateInput) {
   const ai = createVeoClient(input.apiKey);
   const referenceImages = (input.referenceImages ?? []).map((image) => ({
     image: toSdkImage(image),
     referenceType: VideoGenerationReferenceType.ASSET,
   }));
+  const isExtension = Boolean(input.extensionVideo);
 
   const operation = await ai.models.generateVideos({
     model: input.modelId,
-    prompt: input.prompt,
+    ...(input.prompt.trim() ? { prompt: input.prompt } : {}),
     ...(input.initialFrame ? { image: toSdkImage(input.initialFrame) } : {}),
+    ...(input.extensionVideo ? { video: toSdkVideo(input.extensionVideo) } : {}),
     config: {
-      ...(input.aspectRatio ? { aspectRatio: input.aspectRatio } : {}),
+      numberOfVideos: 1,
+      ...(input.aspectRatio && !isExtension ? { aspectRatio: input.aspectRatio } : {}),
       ...(input.resolution ? { resolution: input.resolution } : {}),
+      ...(input.durationSeconds ? { durationSeconds: input.durationSeconds } : {}),
       ...(input.lastFrame ? { lastFrame: toSdkImage(input.lastFrame) } : {}),
       ...(referenceImages.length ? { referenceImages } : {}),
     },
