@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inngest } from "./inngest";
+import { markExtensionSourceReferenced } from "./extensions";
 import {
   getGenerationJob,
   saveRelayOutput,
@@ -119,6 +120,9 @@ export const submitVeoGenerationJob = inngest.createFunction(
           status: "provider_pending",
           providerOperationId: name,
         });
+        if (job.generation_mode === "extend") {
+          await markExtensionSourceReferenced(jobId);
+        }
         await updateGenerationStatus(jobId, "provider_pending");
         return name;
       });
