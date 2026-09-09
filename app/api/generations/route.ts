@@ -7,6 +7,7 @@ import {
   updateGenerationStatus,
   type GenerationAssetInput,
 } from "@/lib/generations";
+import { findGenerationJobByRequestId } from "@/lib/generation-idempotency";
 import {
   assertGenerationInfrastructureReady,
   GenerationInfrastructureError,
@@ -44,6 +45,11 @@ export async function POST(request: Request) {
       if (!body?.[key] || typeof body[key] !== "string") {
         return NextResponse.json({ error: `${key} is required` }, { status: 400 });
       }
+    }
+
+    const existing = await findGenerationJobByRequestId(body.generationRequestId);
+    if (existing) {
+      return NextResponse.json({ job: existing, created: false }, { status: 200 });
     }
 
     const aspectRatioSnapshot = typeof body.aspectRatioSnapshot === "string" ? body.aspectRatioSnapshot : "9:16";
