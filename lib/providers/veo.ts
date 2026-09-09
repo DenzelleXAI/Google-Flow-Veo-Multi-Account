@@ -23,6 +23,12 @@ export type VeoGenerateInput = {
   extensionVideo?: VeoVideoInput | null;
 };
 
+export const PAID_VEO_HTTP_OPTIONS = {
+  // @google/genai counts the initial request in `attempts`, so 1 means the
+  // SDK itself performs zero retries around the non-idempotent paid submit.
+  retryOptions: { attempts: 1 },
+} as const;
+
 export function createVeoClient(apiKey: string) {
   return new GoogleGenAI({ apiKey });
 }
@@ -56,6 +62,7 @@ export async function submitVeoGeneration(input: VeoGenerateInput) {
     ...(input.extensionVideo ? { video: toSdkVideo(input.extensionVideo) } : {}),
     config: {
       numberOfVideos: 1,
+      httpOptions: PAID_VEO_HTTP_OPTIONS,
       ...(input.aspectRatio && !isExtension ? { aspectRatio: input.aspectRatio } : {}),
       ...(input.resolution ? { resolution: input.resolution } : {}),
       ...(input.durationSeconds ? { durationSeconds: input.durationSeconds } : {}),
