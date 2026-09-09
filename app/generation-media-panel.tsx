@@ -53,6 +53,7 @@ export default function GenerationMediaPanel({ jobId }: { jobId: string }) {
   const [media, setMedia] = useState<MediaState | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [openingAssetId, setOpeningAssetId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -78,16 +79,34 @@ export default function GenerationMediaPanel({ jobId }: { jobId: string }) {
     };
   }, [jobId]);
 
+  async function openRelayCopy(assetId: string) {
+    if (openingAssetId) return;
+    setOpeningAssetId(assetId);
+    setError("");
+    try {
+      const response = await fetch(`/api/assets/${encodeURIComponent(assetId)}/download`, { cache: "no-store" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? "Relay copy is unavailable");
+      if (typeof data.downloadUrl !== "string") throw new Error("No relay download URL was returned");
+      window.open(data.downloadUrl, "_blank", "noopener,noreferrer");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to open relay copy");
+    } finally {
+      setOpeningAssetId(null);
+    }
+  }
+
   if (loading) return <p className={styles.empty}>Loading media locality…</p>;
-  if (error) return <p className={styles.recordError}>{error}</p>;
   if (!media || media.outputs.length === 0) return <p className={styles.empty}>No generated media output yet.</p>;
 
   return (
     <div className={styles.mediaGrid}>
+      {error ? <p className={styles.recordError}>{error}</p> : null}
       {media.outputs.map((output) => {
         const targetReplica = media.targetDeviceId
           ? output.replicas.find((replica) => replica.device_id === media.targetDeviceId)
           : null;
+        const relayAvailable = Boolean(output.r2_key) && !output.relay_deleted_at;
         return (
           <article key={output.asset_id} className={styles.mediaCard}>
             <div className={styles.recordTitle}>
@@ -100,6 +119,15 @@ export default function GenerationMediaPanel({ jobId }: { jobId: string }) {
               <div><dt>Extension reference</dt><dd>{formatDate(output.provider_reference_last_used_at)}</dd></div>
               <div><dt>Target device</dt><dd>{targetReplica ? `${targetReplica.device_name} · ${targetReplica.status}` : media.targetDeviceId ? "Not present yet" : "None selected"}</dd></div>
             </dl>
+
+            {relayAvailable ? (
+              <div className={styles.mediaActions}>
+                <button onClick={() => void openRelayCopy(output.asset_id)} disabled={openingAssetId !== null}>
+                  {openingAssetId === output.asset_id ? "Opening…" : "Open R2 copy"}
+                </button>
+                <span>Short-lived signed link · no R2 credentials exposed</span>
+              </div>
+            ) : null}
 
             <div className={styles.replicaList}>
               {output.replicas.length === 0 ? <span>No device replicas reported.</span> : null}
