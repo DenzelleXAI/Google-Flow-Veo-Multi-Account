@@ -1,4 +1,5 @@
 import { resolveGoogleProfile } from "./provider-profiles";
+import { relayConfiguration } from "./r2";
 
 export class GenerationInfrastructureError extends Error {
   constructor(
@@ -15,11 +16,11 @@ function has(name: string) {
 }
 
 export async function assertGenerationInfrastructureReady(requestedApiProfileId?: string | null) {
-  const missingR2 = ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET"].filter((name) => !has(name));
-  if (missingR2.length) {
+  const relay = relayConfiguration();
+  if (!relay.ready) {
     throw new GenerationInfrastructureError(
       "R2_NOT_CONFIGURED",
-      `R2 relay is not fully configured. Missing: ${missingR2.join(", ")}.`,
+      `R2/S3 relay is not fully configured. Missing: ${relay.missing.join(", ")}.`,
     );
   }
 
