@@ -90,7 +90,12 @@ async function verifyRequiredSchema() {
   `;
 
   await sql`
-    select r2_key, relay_delete_after, relay_deleted_at, duration_seconds
+    select
+      r2_key,
+      relay_delete_after,
+      relay_deleted_at,
+      veo_reference_refreshed_at,
+      duration_seconds
     from assets
     limit 0
   `;
