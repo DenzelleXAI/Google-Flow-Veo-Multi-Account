@@ -31,12 +31,10 @@ export async function listPendingLocalAssets(deviceId: string): Promise<PendingL
       a.filename,
       a.sha256,
       a.file_size_bytes,
-      a.r2_key,
-      p.name as project_name
+      a.r2_key
     from generation_outputs go
     join generation_jobs j on j.id = go.generation_job_id
     join assets a on a.id = go.asset_id
-    join projects p on p.id = j.project_id
     left join asset_locations al
       on al.asset_id = a.id
       and al.device_id = ${deviceId}
@@ -46,6 +44,7 @@ export async function listPendingLocalAssets(deviceId: string): Promise<PendingL
       and j.target_device_id = ${deviceId}
       and j.status = 'cloud_ready'
       and a.r2_key is not null
+      and a.relay_deleted_at is null
       and a.sha256 is not null
       and al.id is null
     order by go.created_at asc
@@ -54,17 +53,18 @@ export async function listPendingLocalAssets(deviceId: string): Promise<PendingL
 
   const pending: PendingLocalAsset[] = [];
   for (const row of rows) {
-    const projectFolder = String(row.project_name ?? "Project").replace(/[<>:"/\\|?*]+/g, "_").trim() || "Project";
+    const assetId = String(row.asset_id);
+    const generationJobId = String(row.generation_job_id);
     const filename = String(row.filename);
     const r2Key = String(row.r2_key);
     pending.push({
-      assetId: String(row.asset_id),
-      generationJobId: String(row.generation_job_id),
+      assetId,
+      generationJobId,
       filename,
       sha256: String(row.sha256),
       fileSizeBytes: row.file_size_bytes === null ? null : Number(row.file_size_bytes),
       r2Key,
-      relativePath: `Projects/${projectFolder}/generations/${filename}`,
+      relativePath: `media/${workspace.id}/outputs/${generationJobId}/${assetId}.mp4`,
       downloadUrl: await createRelayDownloadUrl(r2Key, 900),
     });
   }
