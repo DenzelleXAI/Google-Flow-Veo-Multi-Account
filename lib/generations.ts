@@ -15,9 +15,11 @@ export type GenerationStatus =
   | "failed_final"
   | "cancelled";
 
+export type GenerationMode = "generate" | "extend";
+
 export type GenerationAssetInput = {
   assetId: string;
-  role: "initial_frame" | "last_frame" | "reference_asset";
+  role: "initial_frame" | "last_frame" | "reference_asset" | "extension_source";
   sortOrder?: number;
 };
 
@@ -31,7 +33,10 @@ export class GenerationSafetyError extends Error {
       | "MONTHLY_SPEND_LIMIT"
       | "LOW_DISK"
       | "INVALID_DEVICE"
-      | "INVALID_PROJECT",
+      | "INVALID_PROJECT"
+      | "INVALID_PARENT"
+      | "EXTENSION_LIMIT"
+      | "INVALID_EXTENSION_SOURCE",
     message: string,
   ) {
     super(message);
@@ -47,6 +52,10 @@ export type GenerationJobRecord = {
   scene_id: string | null;
   requested_api_profile_id: string | null;
   target_device_id: string | null;
+  parent_generation_job_id: string | null;
+  generation_mode: GenerationMode;
+  extension_depth: number;
+  expected_output_duration_seconds: number | null;
   model_id: string;
   prompt_snapshot: string;
   aspect_ratio_snapshot: string;
@@ -57,6 +66,11 @@ export type GenerationJobRecord = {
   status: GenerationStatus;
   project_name?: string;
   scene_title?: string | null;
+  output_asset_id?: string | null;
+  output_filename?: string | null;
+  output_r2_key?: string | null;
+  output_relay_deleted_at?: string | Date | null;
+  output_created_at?: string | Date | null;
   created_at?: string | Date;
   updated_at?: string | Date;
 };
@@ -84,17 +98,21 @@ export type GenerationOutputRecord = {
   r2_key: string | null;
   sha256: string | null;
   file_size_bytes: number | null;
+  duration_seconds: number | null;
 };
 
 export type GenerationInputRecord = {
   asset_id: string;
   role: GenerationAssetInput["role"];
   sort_order: number;
+  type: string;
   filename: string;
   mime_type: string | null;
   r2_key: string | null;
+  relay_deleted_at: string | Date | null;
   sha256: string | null;
   file_size_bytes: number | null;
+  duration_seconds: number | null;
 };
 
 export type GenerationJobDetail = GenerationJobRecord & {
@@ -115,6 +133,8 @@ export async function createGenerationJob(input: {
   durationSecondsSnapshot?: number | null;
   resolutionSnapshot?: string | null;
   assetInputs?: GenerationAssetInput[];
+  generationMode?: GenerationMode;
+  parentGenerationJobId?: string | null;
 }) {
   const sql = requireDb();
   const workspace = await ensurePersonalWorkspace();
@@ -141,6 +161,99 @@ export async function createGenerationJob(input: {
       throw new GenerationSafetyError("INVALID_PROJECT", "Project does not belong to this workspace.");
     }
 
+    const generationMode: GenerationMode = input.generationMode ?? "generate";
+    let parentGenerationJobId: string | null = null;
+    let extensionDepth = 0;
+    let expectedOutputDurationSeconds = input.durationSecondsSnapshot ?? 8;
+    let sceneId = input.sceneId ?? null;
+    let aspectRatio = input.aspectRatioSnapshot ?? "9:16";
+    let durationSeconds = input.durationSecondsSnapshot ?? 8;
+    let resolution = input.resolutionSnapshot ?? "720p";
+    let effectiveAssetInputs = input.assetInputs ?? [];
+
+    if (generationMode === "extend") {
+      if (!input.parentGenerationJobId) {
+        throw new GenerationSafetyError("INVALID_PARENT", "Video extension requires a parent generation job.");
+      }
+      if (effectiveAssetInputs.length) {
+        throw new GenerationSafetyError("INVALID_EXTENSION_SOURCE", "Extension source is derived from the parent generation and cannot be supplied manually.");
+      }
+
+      const parentRows = await tx`
+        select
+          j.id,
+          j.project_id,
+          j.scene_id,
+          j.aspect_ratio_snapshot,
+          j.resolution_snapshot,
+          j.extension_depth,
+          coalesce(j.expected_output_duration_seconds, j.duration_seconds_snapshot) as expected_output_duration_seconds,
+          j.status,
+          a.id as output_asset_id,
+          a.type as output_asset_type,
+          a.mime_type as output_mime_type,
+          a.r2_key as output_r2_key,
+          a.relay_deleted_at as output_relay_deleted_at,
+          a.created_at as output_created_at
+        from generation_jobs j
+        left join lateral (
+          select a.*
+          from generation_outputs go
+          join assets a on a.id = go.asset_id
+          where go.generation_job_id = j.id
+          order by go.created_at desc
+          limit 1
+        ) a on true
+        where j.id = ${input.parentGenerationJobId}
+          and j.workspace_id = ${workspace.id}
+          and j.project_id = ${input.projectId}
+        limit 1
+        for update of j
+      `;
+      const parent = parentRows[0];
+      if (!parent) {
+        throw new GenerationSafetyError("INVALID_PARENT", "Parent generation does not exist in this project.");
+      }
+      if (!["cloud_ready", "local_confirmed"].includes(String(parent.status))) {
+        throw new GenerationSafetyError("INVALID_PARENT", "Only a completed Veo generation can be extended.");
+      }
+      if (String(parent.resolution_snapshot) !== "720p") {
+        throw new GenerationSafetyError("INVALID_EXTENSION_SOURCE", "Only 720p Veo videos can be extended.");
+      }
+
+      const parentDuration = Number(parent.expected_output_duration_seconds ?? 0);
+      if (!Number.isFinite(parentDuration) || parentDuration <= 0 || parentDuration > 141) {
+        throw new GenerationSafetyError("INVALID_EXTENSION_SOURCE", "Extension source must be a Veo video no longer than 141 seconds.");
+      }
+
+      extensionDepth = Number(parent.extension_depth ?? 0) + 1;
+      if (extensionDepth > 20) {
+        throw new GenerationSafetyError("EXTENSION_LIMIT", "Veo supports at most 20 extensions in one generation chain.");
+      }
+
+      if (
+        !parent.output_asset_id ||
+        parent.output_asset_type !== "GENERATED_VIDEO" ||
+        !String(parent.output_mime_type ?? "").startsWith("video/") ||
+        !parent.output_r2_key ||
+        parent.output_relay_deleted_at
+      ) {
+        throw new GenerationSafetyError("INVALID_EXTENSION_SOURCE", "The parent Veo output is not available in the R2 relay for extension.");
+      }
+
+      parentGenerationJobId = String(parent.id);
+      sceneId = sceneId ?? (parent.scene_id ? String(parent.scene_id) : null);
+      aspectRatio = String(parent.aspect_ratio_snapshot ?? "9:16");
+      durationSeconds = 8;
+      resolution = "720p";
+      expectedOutputDurationSeconds = parentDuration + 7;
+      effectiveAssetInputs = [{
+        assetId: String(parent.output_asset_id),
+        role: "extension_source",
+        sortOrder: 0,
+      }];
+    }
+
     await tx`
       insert into workspace_settings (workspace_id)
       values (${workspace.id})
@@ -157,8 +270,8 @@ export async function createGenerationJob(input: {
     `;
     const settings = settingsRows[0];
 
-    const durationSeconds = input.durationSecondsSnapshot ?? 8;
-    const resolution = input.resolutionSnapshot ?? "720p";
+    // Extension reserves an 8-second 720p request. Google currently adds 7 seconds
+    // to the source video, so this intentionally reserves spend conservatively.
     const pricing = estimateVeoCostUsd({
       modelId: input.modelId,
       resolution,
@@ -256,13 +369,15 @@ export async function createGenerationJob(input: {
     const rows = await tx`
       insert into generation_jobs (
         generation_request_id, workspace_id, project_id, scene_id,
-        requested_api_profile_id, target_device_id, model_id,
-        prompt_snapshot, aspect_ratio_snapshot, duration_seconds_snapshot,
+        requested_api_profile_id, target_device_id,
+        parent_generation_job_id, generation_mode, extension_depth, expected_output_duration_seconds,
+        model_id, prompt_snapshot, aspect_ratio_snapshot, duration_seconds_snapshot,
         resolution_snapshot, estimated_cost_usd, pricing_version, status
       ) values (
-        ${input.generationRequestId}, ${workspace.id}, ${input.projectId}, ${input.sceneId ?? null},
-        ${input.requestedApiProfileId ?? null}, ${effectiveTargetDeviceId}, ${input.modelId},
-        ${input.promptSnapshot}, ${input.aspectRatioSnapshot ?? "9:16"},
+        ${input.generationRequestId}, ${workspace.id}, ${input.projectId}, ${sceneId},
+        ${input.requestedApiProfileId ?? null}, ${effectiveTargetDeviceId},
+        ${parentGenerationJobId}, ${generationMode}, ${extensionDepth}, ${expectedOutputDurationSeconds},
+        ${input.modelId}, ${input.promptSnapshot}, ${aspectRatio},
         ${durationSeconds}, ${resolution}, ${pricing.estimatedCostUsd}, ${pricing.pricingVersion}, 'queued'
       )
       returning *
@@ -270,13 +385,17 @@ export async function createGenerationJob(input: {
 
     const job = rows[0] as unknown as GenerationJobRecord;
 
-    for (const item of input.assetInputs ?? []) {
-      await tx`
+    for (const item of effectiveAssetInputs) {
+      const inserted = await tx`
         insert into generation_job_assets (generation_job_id, asset_id, role, sort_order)
         select ${job.id}, a.id, ${item.role}, ${item.sortOrder ?? 0}
         from assets a
         where a.id = ${item.assetId} and a.project_id = ${input.projectId}
+        returning id
       `;
+      if (!inserted[0]) {
+        throw new GenerationSafetyError("INVALID_EXTENSION_SOURCE", `Asset ${item.assetId} does not belong to this project.`);
+      }
     }
 
     return { job, created: true };
@@ -304,7 +423,7 @@ export async function getGenerationJob(jobId: string): Promise<GenerationJobDeta
   `;
   const outputs = await sql`
     select go.id, go.asset_id, go.created_at,
-           a.filename, a.relative_path, a.r2_key, a.sha256, a.file_size_bytes
+           a.filename, a.relative_path, a.r2_key, a.sha256, a.file_size_bytes, a.duration_seconds
     from generation_outputs go
     join assets a on a.id = go.asset_id
     where go.generation_job_id = ${jobId}
@@ -312,7 +431,8 @@ export async function getGenerationJob(jobId: string): Promise<GenerationJobDeta
   `;
   const inputs = await sql`
     select gja.asset_id, gja.role, gja.sort_order,
-      a.filename, a.mime_type, a.r2_key, a.sha256, a.file_size_bytes
+      a.type, a.filename, a.mime_type, a.r2_key, a.relay_deleted_at,
+      a.sha256, a.file_size_bytes, a.duration_seconds
     from generation_job_assets gja
     join assets a on a.id = gja.asset_id
     where gja.generation_job_id = ${jobId}
@@ -332,16 +452,42 @@ export async function listRecentGenerationJobs(projectId?: string | null) {
   const workspace = await ensurePersonalWorkspace();
   const rows = projectId
     ? await sql`
-        select j.*, s.title as scene_title
+        select j.*, s.title as scene_title,
+          output.asset_id as output_asset_id,
+          output.filename as output_filename,
+          output.r2_key as output_r2_key,
+          output.relay_deleted_at as output_relay_deleted_at,
+          output.created_at as output_created_at
         from generation_jobs j
         left join scenes s on s.id = j.scene_id
+        left join lateral (
+          select a.id as asset_id, a.filename, a.r2_key, a.relay_deleted_at, go.created_at
+          from generation_outputs go
+          join assets a on a.id = go.asset_id
+          where go.generation_job_id = j.id
+          order by go.created_at desc
+          limit 1
+        ) output on true
         where j.workspace_id = ${workspace.id} and j.project_id = ${projectId}
         order by j.created_at desc limit 50
       `
     : await sql`
-        select j.*, s.title as scene_title
+        select j.*, s.title as scene_title,
+          output.asset_id as output_asset_id,
+          output.filename as output_filename,
+          output.r2_key as output_r2_key,
+          output.relay_deleted_at as output_relay_deleted_at,
+          output.created_at as output_created_at
         from generation_jobs j
         left join scenes s on s.id = j.scene_id
+        left join lateral (
+          select a.id as asset_id, a.filename, a.r2_key, a.relay_deleted_at, go.created_at
+          from generation_outputs go
+          join assets a on a.id = go.asset_id
+          where go.generation_job_id = j.id
+          order by go.created_at desc
+          limit 1
+        ) output on true
         where j.workspace_id = ${workspace.id}
         order by j.created_at desc limit 50
       `;
@@ -400,9 +546,21 @@ export async function saveRelayOutput(input: {
 }) {
   const sql = requireDb();
   return sql.begin(async (tx) => {
+    const jobs = await tx`
+      select expected_output_duration_seconds
+      from generation_jobs
+      where id = ${input.jobId} and project_id = ${input.projectId}
+      limit 1
+    `;
+    if (!jobs[0]) throw new Error("Generation job not found while saving relay output.");
+
     const assets = await tx`
-      insert into assets (project_id, type, filename, mime_type, r2_key, sha256, file_size_bytes)
-      values (${input.projectId}, 'GENERATED_VIDEO', ${input.filename}, 'video/mp4', ${input.r2Key}, ${input.sha256}, ${input.fileSizeBytes})
+      insert into assets (
+        project_id, type, filename, mime_type, r2_key, sha256, file_size_bytes, duration_seconds
+      ) values (
+        ${input.projectId}, 'GENERATED_VIDEO', ${input.filename}, 'video/mp4', ${input.r2Key},
+        ${input.sha256}, ${input.fileSizeBytes}, ${jobs[0].expected_output_duration_seconds ?? null}
+      )
       returning *
     `;
     await tx`
