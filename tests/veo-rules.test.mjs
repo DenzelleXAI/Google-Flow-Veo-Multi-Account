@@ -98,6 +98,85 @@ test("720p supports 4, 6, and 8 second generations", () => {
   }
 });
 
+test("last frame requires an initial frame", () => {
+  assert.match(
+    validateVeoSettings({
+      modelId: "veo-3.1-generate-preview",
+      resolution: "720p",
+      durationSeconds: 8,
+      aspectRatio: "9:16",
+      hasLastFrame: true,
+      hasInitialFrame: false,
+    }) ?? "",
+    /last frame requires an initial frame/i,
+  );
+});
+
+test("Lite supports first and last frame interpolation", () => {
+  assert.equal(
+    validateVeoSettings({
+      modelId: "veo-3.1-lite-generate-preview",
+      resolution: "720p",
+      durationSeconds: 8,
+      aspectRatio: "9:16",
+      hasInitialFrame: true,
+      hasLastFrame: true,
+    }),
+    null,
+  );
+});
+
+test("Standard and Fast accept at most three reference images", () => {
+  for (const modelId of ["veo-3.1-generate-preview", "veo-3.1-fast-generate-preview"]) {
+    assert.equal(
+      validateVeoSettings({
+        modelId,
+        resolution: "720p",
+        durationSeconds: 8,
+        aspectRatio: "9:16",
+        referenceImageCount: 3,
+      }),
+      null,
+    );
+    assert.match(
+      validateVeoSettings({
+        modelId,
+        resolution: "720p",
+        durationSeconds: 8,
+        aspectRatio: "9:16",
+        referenceImageCount: 4,
+      }) ?? "",
+      /at most 3 reference images/i,
+    );
+  }
+});
+
+test("Lite rejects reference images", () => {
+  assert.match(
+    validateVeoSettings({
+      modelId: "veo-3.1-lite-generate-preview",
+      resolution: "720p",
+      durationSeconds: 8,
+      aspectRatio: "9:16",
+      referenceImageCount: 1,
+    }) ?? "",
+    /does not support reference images/i,
+  );
+});
+
+test("reference images require 8 seconds", () => {
+  assert.match(
+    validateVeoSettings({
+      modelId: "veo-3.1-generate-preview",
+      resolution: "720p",
+      durationSeconds: 6,
+      aspectRatio: "9:16",
+      referenceImageCount: 1,
+    }) ?? "",
+    /requires an 8-second duration/i,
+  );
+});
+
 test("unsupported model is rejected for both capability and pricing", () => {
   assert.match(
     validateVeoSettings({ modelId: "veo-unknown", resolution: "720p", durationSeconds: 8, aspectRatio: "9:16" }) ?? "",
