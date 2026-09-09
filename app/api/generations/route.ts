@@ -56,16 +56,6 @@ export async function POST(request: Request) {
     const durationSecondsSnapshot = Number.isInteger(body.durationSecondsSnapshot) ? body.durationSecondsSnapshot : 8;
     const resolutionSnapshot = typeof body.resolutionSnapshot === "string" ? body.resolutionSnapshot : "720p";
 
-    const capabilityError = validateVeoSettings({
-      modelId: body.modelId,
-      aspectRatio: aspectRatioSnapshot,
-      durationSeconds: durationSecondsSnapshot,
-      resolution: resolutionSnapshot,
-    });
-    if (capabilityError) {
-      return NextResponse.json({ error: capabilityError }, { status: 400 });
-    }
-
     const assetInputs: GenerationAssetInput[] = [];
     if (Array.isArray(body.assetInputs)) {
       for (const [index, raw] of body.assetInputs.entries()) {
@@ -83,17 +73,21 @@ export async function POST(request: Request) {
     const initialCount = assetInputs.filter((item) => item.role === "initial_frame").length;
     const lastCount = assetInputs.filter((item) => item.role === "last_frame").length;
     const referenceCount = assetInputs.filter((item) => item.role === "reference_asset").length;
-    if (initialCount > 1 || lastCount > 1 || referenceCount > 3) {
-      return NextResponse.json({ error: "Use at most one initial frame, one last frame, and three reference images" }, { status: 400 });
+    if (initialCount > 1 || lastCount > 1) {
+      return NextResponse.json({ error: "Use at most one initial frame and one last frame" }, { status: 400 });
     }
-    if (lastCount && !initialCount) {
-      return NextResponse.json({ error: "A last frame requires an initial frame" }, { status: 400 });
-    }
-    if (referenceCount && durationSecondsSnapshot !== 8) {
-      return NextResponse.json({ error: "Reference-image generation requires an 8-second duration" }, { status: 400 });
-    }
-    if (referenceCount && body.modelId.includes("lite")) {
-      return NextResponse.json({ error: "Veo 3.1 Lite does not support reference images" }, { status: 400 });
+
+    const capabilityError = validateVeoSettings({
+      modelId: body.modelId,
+      aspectRatio: aspectRatioSnapshot,
+      durationSeconds: durationSecondsSnapshot,
+      resolution: resolutionSnapshot,
+      hasInitialFrame: initialCount === 1,
+      hasLastFrame: lastCount === 1,
+      referenceImageCount: referenceCount,
+    });
+    if (capabilityError) {
+      return NextResponse.json({ error: capabilityError }, { status: 400 });
     }
 
     const requestedApiProfileId = typeof body.requestedApiProfileId === "string" ? body.requestedApiProfileId : null;
