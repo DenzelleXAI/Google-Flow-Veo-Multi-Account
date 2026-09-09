@@ -6,6 +6,32 @@ import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 import os from "node:os";
 
+const companionVersion = "0.4.0";
+const cliArgs = process.argv.slice(2);
+
+if (cliArgs.includes("--version") || cliArgs.includes("-v")) {
+  console.log(`Persistent AI Video Studio Companion ${companionVersion}`);
+  process.exit(0);
+}
+
+if (cliArgs.includes("--help") || cliArgs.includes("-h")) {
+  console.log([
+    `Persistent AI Video Studio Companion ${companionVersion}`,
+    "",
+    "Environment:",
+    "  COMPANION_APP_URL       App server URL",
+    "  COMPANION_TOKEN         Shared companion authentication secret",
+    "  COMPANION_DEVICE_NAME   Friendly device name",
+    "  COMPANION_MEDIA_ROOT    Local canonical media root",
+    "  COMPANION_DEVICE_ID     Optional fixed registered device ID",
+    "",
+    "Options:",
+    "  --version, -v            Print version and exit",
+    "  --help, -h               Print help and exit",
+  ].join("\n"));
+  process.exit(0);
+}
+
 const appUrl = (process.env.COMPANION_APP_URL || "http://localhost:3000").replace(/\/$/, "");
 const token = process.env.COMPANION_TOKEN;
 const deviceName = process.env.COMPANION_DEVICE_NAME || os.hostname();
@@ -139,7 +165,7 @@ async function syncOnce(deviceId) {
 }
 
 let deviceId = await loadDeviceId();
-console.log(`Persistent AI Video Studio companion\nDevice: ${deviceName}\nMedia root: ${mediaRoot}\nServer: ${appUrl}`);
+console.log(`Persistent AI Video Studio companion ${companionVersion}\nDevice: ${deviceName}\nMedia root: ${mediaRoot}\nServer: ${appUrl}`);
 
 async function cycle() {
   try {
