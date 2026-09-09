@@ -13,9 +13,17 @@ import {
 } from "./generations";
 import { requireDb } from "./db";
 import { classifyProviderSubmissionFailure } from "./provider-error-policy";
+import { claimProviderSubmission, failClosedStaleProviderSubmissions } from "./provider-submit-claim";
 import { resolveGoogleProfile } from "./provider-profiles";
 import { createVeoClient, downloadVeoVideo, pollVeoOperation, submitVeoGeneration } from "./providers/veo";
 import { downloadRelayObject, uploadVideoToRelay } from "./r2";
+
+class ProviderSubmissionReplayBlockedError extends Error {
+  constructor() {
+    super("Paid provider submission was already durably claimed without a persisted provider operation ID. Automatic resubmission is blocked.");
+    this.name = "ProviderSubmissionReplayBlockedError";
+  }
+}
 
 async function loadVeoInputs(job: any) {
   const inputs = Array.isArray(job.inputs) ? job.inputs : [];
@@ -146,6 +154,15 @@ export const submitVeoGenerationJob = inngest.createFunction(
     let operationName: string | null = null;
     try {
       operationName = await step.run("submit-veo-once", async () => {
+        // Persist the one allowed provider-call claim BEFORE the non-idempotent
+        // Veo HTTP request. If this process dies after the claim, an Inngest
+        // replay cannot claim again and therefore cannot double-submit.
+        const claim = await claimProviderSubmission(attempt.id);
+        if (!claim.claimed) {
+          if (claim.providerOperationId) return claim.providerOperationId;
+          throw new ProviderSubmissionReplayBlockedError();
+        }
+
         const submitted = await submitVeoGeneration({
           apiKey: resolved.apiKey,
           modelId: job.model_id,
@@ -183,6 +200,17 @@ export const submitVeoGenerationJob = inngest.createFunction(
         operationName = persistedAttempt.provider_operation_id;
         await updateGenerationStatus(jobId, "provider_pending")
           .catch((markError) => console.error("Failed to reconcile known provider operation", markError));
+      } else if (error instanceof ProviderSubmissionReplayBlockedError) {
+        await updateAttempt({
+          attemptId: attempt.id,
+          status: "failed_ambiguous",
+          errorCode: "AMBIGUOUS_SUBMISSION_REPLAY_BLOCKED",
+          errorMessage: error.message,
+          completed: true,
+        }).catch((markError) => console.error("Failed to persist replay-blocked ambiguous attempt", markError));
+        await updateGenerationStatus(jobId, "failed_ambiguous")
+          .catch((markError) => console.error("Failed to persist replay-blocked ambiguous job", markError));
+        throw new NonRetriableError(error.message);
       } else {
         const failure = classifyProviderSubmissionFailure(error);
         const providerErrorCode = failure.providerCode ?? (failure.httpStatus ? `http_${failure.httpStatus}` : "unknown");
@@ -246,6 +274,26 @@ export const submitVeoGenerationJob = inngest.createFunction(
     });
 
     return { jobId, status: "provider_pending", operationName };
+  },
+);
+
+export const detectStaleVeoSubmissions = inngest.createFunction(
+  {
+    id: "detect-stale-veo-submissions",
+    name: "Fail closed stale Veo submissions",
+    triggers: { cron: "* * * * *" },
+    retries: 3,
+  },
+  async ({ step }) => {
+    const failed = await step.run("fail-closed-stale-provider-submissions", async () => {
+      return failClosedStaleProviderSubmissions(120, 100);
+    });
+
+    for (const item of failed) {
+      console.error("CRITICAL: paid Veo submission became ambiguous after process interruption", item);
+    }
+
+    return { failedAmbiguous: failed.length, attempts: failed };
   },
 );
 
