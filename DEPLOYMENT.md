@@ -67,6 +67,8 @@ The response should report:
 - `inngest = ready`
 - `readyForPaidGeneration = true`
 
+The deep database health check verifies both connectivity and the required schema/columns, including spend and relay-retention fields.
+
 The endpoint never returns API keys, R2 credentials, database credentials, encryption keys, or companion secrets.
 
 ## 5. Run generation preflight
@@ -181,7 +183,7 @@ Do not automatically resubmit that state because the provider may already have a
 On the target PC configure:
 
 ```env
-APP_BASE_URL=https://<your-app-host>
+COMPANION_APP_URL=https://<your-app-host>
 COMPANION_TOKEN=<same server companion token>
 COMPANION_DEVICE_NAME=Home-PC
 COMPANION_MEDIA_ROOT=D:\AI Video Studio
@@ -205,7 +207,13 @@ The companion:
 8. atomically renames the verified file
 9. reports the verified local location
 
-After server-side hash confirmation the generation becomes:
+Canonical generated-video paths use stable IDs, not project display names:
+
+```text
+media/<workspace_id>/outputs/<generation_job_id>/<asset_id>.mp4
+```
+
+After server-side hash confirmation on the designated target device, the generation becomes:
 
 ```text
 LOCAL_CONFIRMED
@@ -215,9 +223,24 @@ LOCAL_CONFIRMED
 
 R2 is a transient relay, not the permanent media library.
 
-Recommended initial retention while testing: **14 days**.
+The application does **not** delete generated-video relay objects merely because time passed.
 
-Do not aggressively delete relay objects immediately after one download. Keep a recovery window until the local-first delivery workflow has proven stable.
+Deletion flow:
+
+```text
+Target device verifies SHA-256
+-> generation becomes LOCAL_CONFIRMED
+-> relay_delete_after = now + 24 hours
+-> daily Inngest cleanup checks eligibility
+-> R2 object is deleted
+-> relay_deleted_at is recorded
+```
+
+A non-target device verifying a synced copy does not start the deletion timer.
+
+The cleanup worker also requires a verified local `asset_locations` record before deletion. `DeleteObject` is safe to retry; the database is marked deleted only after the R2 delete request succeeds.
+
+You may additionally configure an R2 bucket lifecycle as a long-stop safety policy, but do not set it shorter than your acceptable recovery window. The app-driven cleanup remains the primary verified-local deletion path.
 
 ## 11. Production deployment strategy
 
@@ -233,6 +256,7 @@ Recommended order:
 8. verify R2 output hash
 9. start the companion
 10. verify `LOCAL_CONFIRMED`
-11. only then promote the tested deployment to production
+11. wait through the cleanup grace window in a test environment and verify relay deletion behavior
+12. only then promote the tested deployment to production
 
 Do not put an automatic multi-account quota rotation system in front of this workflow. V1 switching remains manual and user-authorized.
