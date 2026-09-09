@@ -36,6 +36,56 @@ function safeError(error: unknown) {
   return "Health check failed.";
 }
 
+async function verifyRequiredSchema() {
+  const sql = requireDb();
+
+  const rows = await sql`
+    select
+      to_regclass('public.workspaces') is not null as workspaces_ok,
+      to_regclass('public.projects') is not null as projects_ok,
+      to_regclass('public.scenes') is not null as scenes_ok,
+      to_regclass('public.api_profiles') is not null as profiles_ok,
+      to_regclass('public.generation_jobs') is not null as generation_jobs_ok,
+      to_regclass('public.generation_attempts') is not null as generation_attempts_ok,
+      to_regclass('public.assets') is not null as assets_ok,
+      to_regclass('public.asset_locations') is not null as asset_locations_ok,
+      to_regclass('public.agent_threads') is not null as agent_threads_ok,
+      to_regclass('public.research_sessions') is not null as research_sessions_ok
+  `;
+
+  const required = rows[0] ?? {};
+  const missingTables = Object.entries(required)
+    .filter(([, present]) => !present)
+    .map(([name]) => name.replace(/_ok$/, ""));
+
+  if (missingTables.length) {
+    throw new Error(`Database schema is incomplete. Missing tables: ${missingTables.join(", ")}. Run npm run db:bootstrap.`);
+  }
+
+  await sql`
+    select
+      estimated_cost_usd,
+      pricing_version,
+      requested_api_profile_id,
+      target_device_id
+    from generation_jobs
+    limit 0
+  `;
+
+  await sql`
+    select
+      daily_generation_limit,
+      monthly_generation_limit,
+      daily_spend_limit_usd,
+      monthly_spend_limit_usd,
+      per_request_spend_limit_usd,
+      min_free_disk_bytes,
+      device_stale_after_seconds
+    from workspace_settings
+    limit 0
+  `;
+}
+
 export async function getSystemHealth(deep = false): Promise<SystemHealth> {
   const envGoogleConfigured = hasEnvironmentGoogleCredential();
 
@@ -82,7 +132,8 @@ export async function getSystemHealth(deep = false): Promise<SystemHealth> {
     try {
       const sql = requireDb();
       await sql`select 1 as ok`;
-      checks.database = { state: "ready", detail: "PostgreSQL connection succeeded." };
+      await verifyRequiredSchema();
+      checks.database = { state: "ready", detail: "PostgreSQL connection succeeded and the required schema is present." };
     } catch (error) {
       checks.database = { state: "error", detail: safeError(error) };
     }
