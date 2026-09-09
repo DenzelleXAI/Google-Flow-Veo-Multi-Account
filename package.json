@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:local": "node scripts/ensure-local-env.mjs && docker compose up -d --wait postgres && npm run db:local:bootstrap && npm run db:local:check && next dev",
     "build": "next build",
     "start": "next start",
     "test": "node --experimental-strip-types --test tests/*.test.mjs",
@@ -15,6 +16,7 @@
     "db:local:down": "docker compose down",
     "db:local:reset": "docker compose down -v && docker compose up -d postgres",
     "db:local:bootstrap": "node scripts/db-local-bootstrap.mjs",
+    "db:local:check": "node scripts/db-local-check.mjs",
     "companion": "node companion/index.mjs"
   },
   "dependencies": {
