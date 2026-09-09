@@ -293,7 +293,8 @@
 }
 
 .record,
-.assetRow {
+.assetRow,
+.mediaCard {
   padding: 12px;
   margin-bottom: 8px;
   border: 1px solid #262d35;
@@ -301,24 +302,28 @@
   background: #14181d;
 }
 
-.record dl {
+.record dl,
+.mediaCard dl {
   display: grid;
   gap: 7px;
   margin: 12px 0 0;
 }
 
-.record dl div {
+.record dl div,
+.mediaCard dl div {
   display: grid;
-  grid-template-columns: 100px minmax(0, 1fr);
+  grid-template-columns: 140px minmax(0, 1fr);
   gap: 10px;
   font-size: 12px;
 }
 
-.record dt {
+.record dt,
+.mediaCard dt {
   color: #7f8995;
 }
 
-.record dd {
+.record dd,
+.mediaCard dd {
   margin: 0;
   overflow-wrap: anywhere;
   color: #c9cfd7;
@@ -349,6 +354,74 @@
 .outputMeta code {
   color: #8ea1b5;
   font-size: 11px;
+}
+
+.mediaGrid {
+  display: grid;
+  gap: 10px;
+}
+
+.mediaCard {
+  margin-bottom: 0;
+}
+
+.replicaList {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #252b33;
+}
+
+.replicaList > span {
+  color: #7f8995;
+  font-size: 12px;
+}
+
+.replicaRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: #0f1317;
+}
+
+.replicaRow > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.replicaRow strong {
+  font-size: 12px;
+}
+
+.replicaRow > div span {
+  color: #77818d;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.replicaVerified,
+.replicaPending {
+  flex-shrink: 0;
+  border-radius: 999px;
+  padding: 4px 7px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.replicaVerified {
+  border: 1px solid #2d684d;
+  color: #7ce6ae;
+}
+
+.replicaPending {
+  border: 1px solid #575f69;
+  color: #aeb6c0;
 }
 
 .empty {
@@ -393,8 +466,14 @@
   }
 
   .assetRow,
-  .jobMeta {
+  .jobMeta,
+  .replicaRow {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .record dl div,
+  .mediaCard dl div {
+    grid-template-columns: 1fr;
   }
 }
