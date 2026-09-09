@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
@@ -38,6 +38,11 @@ export async function createRelayDownloadUrl(key: string, expiresInSeconds = 900
     new GetObjectCommand({ Bucket: bucket, Key: key }),
     { expiresIn: expiresInSeconds },
   );
+}
+
+export async function deleteRelayObject(key: string) {
+  const { client, bucket } = createR2Client();
+  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
 }
 
 export async function sha256File(path: string) {
