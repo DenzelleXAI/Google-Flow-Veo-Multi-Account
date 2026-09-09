@@ -12,6 +12,7 @@ export default function UtilityNav() {
       <a href="/assets">Assets</a>
       <a href="/generations">History</a>
       <a href="/extensions">Extensions</a>
+      <a href="/backups">Backups</a>
       <a href="/setup">Setup</a>
       <a href="/profiles">Profiles</a>
       <a href="/logout">Logout</a>
