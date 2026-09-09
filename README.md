@@ -12,9 +12,9 @@ Changing Google API profiles must never reset projects, prompts, scenes, assets,
 
 - **Next.js 16 UI/API** — workspace, scene settings, generation controls, Profiles, Setup, Extensions, persistent Agent, and research APIs.
 - **PostgreSQL** — source of truth for project state, prompt history, devices, assets, API profiles, Agent history, research, generation jobs/attempts/outputs, budgets, and per-device replicas.
-- **Inngest** — durable non-paid monitoring, relay ingestion, monitor recovery, and relay cleanup. The paid Veo submit function is intentionally zero-retry.
+- **Inngest** — durable non-paid monitoring, relay ingestion, monitor recovery, stale-submit detection, and relay cleanup. The paid Veo submit function is intentionally zero-retry.
 - **Cloudflare R2** — transient safety/working relay for input images, generated videos, extension sources, and outputs while local devices may be offline.
-- **Desktop companion** — heartbeats a device, downloads targeted R2 outputs, verifies SHA-256, stores canonical local files, and reports verified replicas.
+- **Desktop companion** — heartbeats a device, downloads targeted R2 outputs, verifies SHA-256, rejects media-path escapes through real-path checks, stores canonical local files, and reports verified replicas.
 - **Local media folder** — intended long-term master media storage.
 - **Optional OneDrive / Google Drive / Syncthing / NAS** — device-to-device media replication; every receiving device must still verify the actual local file hash.
 - **Gemini + Veo** — reasoning/generation providers only; provider profile changes never change project identity.
@@ -48,8 +48,9 @@ Normal generation path:
 ```text
 Generate
 -> immutable job snapshot
--> zero-retry paid Veo submit
--> durable provider operation ID
+-> durable pre-call submit claim
+-> one allowed Veo HTTP submit attempt
+-> durable provider operation ID (when acceptance is known)
 -> recoverable monitor
 -> R2 relay
 -> companion
@@ -132,11 +133,25 @@ Veo request cost is estimated before queueing and stored with a pricing-version 
 
 Ambiguous jobs remain conservatively counted because they may already be billable.
 
-### Zero-retry paid submission
+### Fail-closed paid submission
 
-The Inngest function that calls `generateVideos` has `retries: 0`.
+The Inngest function that calls `generateVideos` has `retries: 0`, and the Google SDK itself is configured for one HTTP attempt around the paid submit.
 
-A submit worker also refuses to call the provider if **any attempt for that job already has a provider operation ID**, protecting against late or replayed submit events.
+Google's current `generateVideos` interface does **not** expose a provider-side idempotency/request key. Therefore the application does not claim mathematically exact-once remote execution across an arbitrary process crash.
+
+Instead, each generation attempt acquires a durable database submit claim **before** the non-idempotent Veo HTTP call. That claim can only be acquired once. If the worker process is killed after the claim and before a provider operation ID is durably stored, replay fails closed and does **not** call Veo again.
+
+Tradeoff:
+
+```text
+possible false-positive ambiguity
+is accepted over
+possible duplicate paid generation
+```
+
+A minute-level stale-submit detector marks a claimed `SUBMITTING` attempt with no operation ID as `FAILED_AMBIGUOUS` after the safety timeout and emits a critical operator log. That logical paid job must not be automatically resubmitted.
+
+A submit worker also refuses to call the provider if any attempt for that job already has a provider operation ID, protecting against late or replayed submit events.
 
 Once an operation ID is known:
 
@@ -155,7 +170,7 @@ Provider monitoring is non-paid and recoverable.
 - A recovery cron scans persisted `PROVIDER_PENDING` attempts with operation IDs and re-emits monitor events when necessary.
 - Monitor retries reconcile any already-persisted output before downloading/storing another asset.
 
-This separates **paid submission exactly-once protection** from **recoverable non-paid monitoring**.
+This separates **fail-closed paid-submit protection** from **recoverable non-paid monitoring**.
 
 ## API profiles
 
@@ -278,7 +293,7 @@ Web content is treated as untrusted evidence and cannot authorize credential cha
 
 ## Desktop companion
 
-The first companion is a Node process and can later be wrapped as a Tauri/Windows application.
+The companion is available as a Node process and as a standalone Windows executable artifact.
 
 It:
 
@@ -286,12 +301,15 @@ It:
 2. Reports media root and free disk.
 3. Receives only outputs targeted to its device ID.
 4. Gets short-lived presigned R2 URLs rather than R2 credentials.
-5. Streams to a `.part` file.
-6. Computes SHA-256.
-7. Verifies the hash against server metadata.
-8. Atomically renames the verified file.
-9. Reports the verified local replica.
-10. Advances the targeted generation to `LOCAL_CONFIRMED` after server-side hash verification.
+5. Lexically validates the requested media path.
+6. Resolves the actual parent path and rejects symlink/junction escapes outside the configured media root.
+7. Streams to a `.part` file.
+8. Computes SHA-256.
+9. Verifies the hash against server metadata.
+10. Re-checks the real parent path immediately before atomic rename.
+11. Atomically renames the verified file.
+12. Reports the verified local replica.
+13. Advances the targeted generation to `LOCAL_CONFIRMED` after server-side hash verification.
 
 Companion configuration:
 
@@ -302,7 +320,7 @@ COMPANION_DEVICE_NAME=Home PC
 COMPANION_MEDIA_ROOT=D:\AI Video Studio
 ```
 
-Run:
+Run development companion:
 
 ```bash
 npm run companion
@@ -356,10 +374,12 @@ Every push to `main` currently runs:
 1. PostgreSQL 16 service
 2. schema bootstrap
 3. schema verification
-4. Veo/retry regression tests
+4. Veo/retry/safety regression tests
 5. TypeScript typecheck
 6. local Next.js persistence/extension smoke test
 7. production Next.js build
+
+The Windows companion workflow additionally builds the standalone executable, runs its `--version` self-check, validates the package layout, and uploads the artifact.
 
 ## Security boundaries
 
@@ -370,6 +390,8 @@ Every push to `main` currently runs:
 - R2 companion downloads use short-lived signed URLs.
 - Server independently verifies companion SHA-256 reports.
 - Paid provider submission has no automatic retry.
+- Paid-submit replay after an unconfirmed process interruption fails closed as ambiguous.
+- Companion writes are constrained by lexical and real-path media-root checks.
 - Automatic account rotation/quota farming is intentionally not implemented.
 
 ## Deployment
