@@ -230,12 +230,19 @@ alter table generation_jobs alter column extension_depth set not null;
 create table if not exists generation_job_assets (
   id uuid primary key default gen_random_uuid(),
   generation_job_id uuid not null references generation_jobs(id) on delete cascade,
-  asset_id uuid not null references assets(id) on delete restrict,
+  asset_id uuid not null references assets(id) on delete no action deferrable initially deferred,
   role text not null,
   sort_order integer not null default 0,
   created_at timestamptz not null default now(),
   unique(generation_job_id, role, sort_order)
 );
+
+alter table generation_job_assets drop constraint if exists generation_job_assets_asset_id_fkey;
+alter table generation_job_assets
+  add constraint generation_job_assets_asset_id_fkey
+  foreign key (asset_id) references assets(id)
+  on delete no action
+  deferrable initially deferred;
 
 create table if not exists generation_attempts (
   id uuid primary key default gen_random_uuid(),
