@@ -12,6 +12,7 @@ import {
   updateGenerationStatus,
 } from "./generations";
 import { requireDb } from "./db";
+import { classifyProviderSubmissionFailure } from "./provider-error-policy";
 import { resolveGoogleProfile } from "./provider-profiles";
 import { createVeoClient, downloadVeoVideo, pollVeoOperation, submitVeoGeneration } from "./providers/veo";
 import { downloadRelayObject, uploadVideoToRelay } from "./r2";
@@ -83,9 +84,6 @@ export const submitVeoGenerationJob = inngest.createFunction(
     id: "submit-veo-generation",
     name: "Submit Veo generation",
     triggers: { event: "video/generation.submit" },
-    // Never automatically retry the function that contains the paid provider
-    // submission. If the provider accepts the request but our response is lost,
-    // an automatic retry could create a second billable generation.
     retries: 0,
   },
   async ({ event, step }) => {
@@ -111,8 +109,26 @@ export const submitVeoGenerationJob = inngest.createFunction(
       return { jobId, status: job.status, skipped: true, reason: "job-state-not-submittable" };
     }
 
-    const resolved = await resolveGoogleProfile(job.requested_api_profile_id);
-    const veoInputs = await loadVeoInputs(job);
+    let resolved: Awaited<ReturnType<typeof resolveGoogleProfile>>;
+    try {
+      resolved = await resolveGoogleProfile(job.requested_api_profile_id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Google profile could not be resolved.";
+      await updateGenerationStatus(jobId, "failed_final")
+        .catch((markError) => console.error("Failed to persist profile failure", markError));
+      throw new NonRetriableError(`Provider profile is unavailable before submission: ${message}`);
+    }
+
+    let veoInputs: Awaited<ReturnType<typeof loadVeoInputs>>;
+    try {
+      veoInputs = await loadVeoInputs(job);
+    } catch (error) {
+      const final = error instanceof NonRetriableError;
+      await updateGenerationStatus(jobId, final ? "failed_final" : "failed_retryable")
+        .catch((markError) => console.error("Failed to persist input-loading failure", markError));
+      const message = error instanceof Error ? error.message : "Veo inputs could not be loaded.";
+      throw new NonRetriableError(`Pre-provider input loading failed: ${message}`);
+    }
 
     let attempt: Awaited<ReturnType<typeof startAttempt>>;
     try {
@@ -127,7 +143,7 @@ export const submitVeoGenerationJob = inngest.createFunction(
       throw new NonRetriableError(`Pre-submit setup failed before provider execution: ${message}`);
     }
 
-    let operationName: string;
+    let operationName: string | null = null;
     try {
       operationName = await step.run("submit-veo-once", async () => {
         const submitted = await submitVeoGeneration({
@@ -146,8 +162,6 @@ export const submitVeoGenerationJob = inngest.createFunction(
         const name = submitted.operation?.name;
         if (!name) throw new Error("Veo accepted the request but returned no operation name.");
 
-        // The paid submission step is not considered successful until the
-        // provider operation ID is durably persisted in our own database.
         await updateAttempt({
           attemptId: attempt.id,
           status: "provider_pending",
@@ -157,21 +171,65 @@ export const submitVeoGenerationJob = inngest.createFunction(
         return name;
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown provider submission error";
-      await updateAttempt({
-        attemptId: attempt.id,
-        status: "failed_ambiguous",
-        errorCode: "AMBIGUOUS_SUBMISSION",
-        errorMessage: message,
-        completed: true,
-      }).catch((markError) => console.error("Failed to persist ambiguous attempt state", markError));
-      await updateGenerationStatus(jobId, "failed_ambiguous")
-        .catch((markError) => console.error("Failed to persist ambiguous job state", markError));
-      throw new NonRetriableError(`Veo submission outcome is ambiguous: ${message}`);
+      // A provider operation may already have been durably stored before a
+      // later database/status write failed. If so, acceptance is known and we
+      // must recover monitoring rather than call the submission ambiguous.
+      const refreshed = await getGenerationJob(jobId).catch(() => null);
+      const persistedAttempt = refreshed?.attempts.find(
+        (candidate) => candidate.id === attempt.id && Boolean(candidate.provider_operation_id),
+      );
+
+      if (persistedAttempt?.provider_operation_id) {
+        operationName = persistedAttempt.provider_operation_id;
+        await updateGenerationStatus(jobId, "provider_pending")
+          .catch((markError) => console.error("Failed to reconcile known provider operation", markError));
+      } else {
+        const failure = classifyProviderSubmissionFailure(error);
+        const providerErrorCode = failure.providerCode ?? (failure.httpStatus ? `http_${failure.httpStatus}` : "unknown");
+
+        if (failure.kind === "final") {
+          await updateAttempt({
+            attemptId: attempt.id,
+            status: "failed_final",
+            errorCode: `PROVIDER_FINAL_${providerErrorCode}`,
+            errorMessage: failure.message,
+            completed: true,
+          }).catch((markError) => console.error("Failed to persist final provider rejection", markError));
+          await updateGenerationStatus(jobId, "failed_final")
+            .catch((markError) => console.error("Failed to persist final job state", markError));
+          throw new NonRetriableError(`Provider rejected the request before generation acceptance: ${failure.message}`);
+        }
+
+        if (failure.kind === "retryable_rejected") {
+          await updateAttempt({
+            attemptId: attempt.id,
+            status: "failed_retryable",
+            errorCode: `PROVIDER_REJECTED_${providerErrorCode}`,
+            errorMessage: failure.message,
+            completed: true,
+          }).catch((markError) => console.error("Failed to persist retryable provider rejection", markError));
+          await updateGenerationStatus(jobId, "failed_retryable")
+            .catch((markError) => console.error("Failed to persist retryable job state", markError));
+          throw new NonRetriableError(`Provider rejected the request with a retryable condition: ${failure.message}`);
+        }
+
+        await updateAttempt({
+          attemptId: attempt.id,
+          status: "failed_ambiguous",
+          errorCode: `AMBIGUOUS_SUBMISSION_${providerErrorCode}`,
+          errorMessage: failure.message,
+          completed: true,
+        }).catch((markError) => console.error("Failed to persist ambiguous attempt state", markError));
+        await updateGenerationStatus(jobId, "failed_ambiguous")
+          .catch((markError) => console.error("Failed to persist ambiguous job state", markError));
+        throw new NonRetriableError(`Veo submission outcome is ambiguous: ${failure.message}`);
+      }
     }
 
-    // This bookkeeping is outside the paid/ambiguous boundary. Failure here
-    // must never make a known provider operation look ambiguous.
+    if (!operationName) {
+      throw new NonRetriableError("Provider operation ID was not available after submission handling.");
+    }
+
     if (job.generation_mode === "extend") {
       await refreshExtensionReferenceBestEffort(jobId);
     }
@@ -226,8 +284,6 @@ export const recoverPendingVeoMonitors = inngest.createFunction(
 
     for (const candidate of candidates) {
       await step.sendEvent(`recover-monitor-${candidate.attempt_id}`, {
-        // Inngest event IDs deduplicate delivery for 24 hours. This makes the
-        // immediate dispatch and recovery cron safe to overlap.
         id: `video-monitor-${candidate.attempt_id}`,
         name: "video/generation.monitor",
         data: {
@@ -266,10 +322,6 @@ export const monitorVeoGeneration = inngest.createFunction(
       return { jobId, status: job.status, skipped: true };
     }
 
-    // A previous monitor run may have persisted the output asset and then
-    // failed before writing the terminal job/attempt statuses. In that case,
-    // reconcile from our durable output instead of downloading and storing a
-    // duplicate asset.
     if (job.outputs.length > 0) {
       const existingOutput = job.outputs[job.outputs.length - 1];
       await step.run("reconcile-existing-output", async () => {
