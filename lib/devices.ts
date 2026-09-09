@@ -98,6 +98,7 @@ export async function listProjectAssets(projectId: string) {
   const sql = requireDb();
   return sql`
     select id, project_id, type, filename, mime_type, relative_path, r2_key,
+      relay_delete_after, relay_deleted_at,
       sha256, file_size_bytes, width, height, duration_seconds, created_at
     from assets
     where project_id = ${projectId}
@@ -134,7 +135,7 @@ export async function upsertAssetLocation(input: {
     if (!devices[0]) throw new Error("Device does not belong to this workspace.");
 
     const assets = await tx`
-      select a.id, a.sha256, p.workspace_id
+      select a.id, a.sha256, a.type, a.r2_key, p.workspace_id
       from assets a
       join projects p on p.id = a.project_id
       where a.id = ${input.assetId} and p.workspace_id = ${workspace.id}
@@ -181,6 +182,15 @@ export async function upsertAssetLocation(input: {
           and j.workspace_id = ${workspace.id}
           and j.status = 'cloud_ready'
       `;
+
+      if (asset.type === "GENERATED_VIDEO" && asset.r2_key) {
+        await tx`
+          update assets
+          set relay_delete_after = coalesce(relay_delete_after, now() + interval '24 hours')
+          where id = ${input.assetId}
+            and relay_deleted_at is null
+        `;
+      }
     }
 
     return rows[0];
