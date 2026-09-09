@@ -10,6 +10,24 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      DATABASE_URL: postgres://flow:flow_ci@127.0.0.1:54329/flow_studio
+      DATABASE_SSL: "false"
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: flow
+          POSTGRES_PASSWORD: flow_ci
+          POSTGRES_DB: flow_studio
+        ports:
+          - 54329:5432
+        options: >-
+          --health-cmd "pg_isready -U flow -d flow_studio"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,11 +40,32 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Bootstrap CI database
+        run: npm run db:bootstrap
+
+      - name: Verify database schema
+        run: npm run db:check
+
       - name: Regression tests
         run: npm test
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Local persistence smoke test
+        run: |
+          npm run dev -- --hostname 127.0.0.1 > /tmp/flow-dev.log 2>&1 &
+          APP_PID=$!
+          trap 'kill $APP_PID 2>/dev/null || true' EXIT
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3000/api/projects >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          npm run smoke:local
+          kill $APP_PID 2>/dev/null || true
+          trap - EXIT
 
       - name: Production build
         run: npm run build
