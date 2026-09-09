@@ -10,6 +10,7 @@
     "test": "node --experimental-strip-types --test tests/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "smoke:local": "node scripts/smoke-local.mjs",
+    "smoke:relay": "node --experimental-strip-types scripts/smoke-relay.mjs",
     "local:up": "docker compose up -d --wait postgres minio && docker compose run --rm minio-init",
     "local:down": "docker compose down",
     "local:reset": "docker compose down -v && docker compose up -d --wait postgres minio && docker compose run --rm minio-init",
