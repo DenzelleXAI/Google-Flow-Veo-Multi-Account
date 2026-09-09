@@ -67,7 +67,11 @@ async function verifyRequiredSchema() {
       estimated_cost_usd,
       pricing_version,
       requested_api_profile_id,
-      target_device_id
+      target_device_id,
+      parent_generation_job_id,
+      generation_mode,
+      extension_depth,
+      expected_output_duration_seconds
     from generation_jobs
     limit 0
   `;
@@ -86,7 +90,7 @@ async function verifyRequiredSchema() {
   `;
 
   await sql`
-    select r2_key, relay_delete_after, relay_deleted_at
+    select r2_key, relay_delete_after, relay_deleted_at, duration_seconds
     from assets
     limit 0
   `;
