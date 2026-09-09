@@ -4,16 +4,44 @@ The Windows companion keeps the local media library synchronized with completed 
 
 It does **not** need Supabase and does not store R2 credentials locally.
 
-## Requirements
+## Recommended: standalone Windows artifact
+
+The recommended distribution is the GitHub Actions artifact named:
+
+```text
+Persistent-AI-Video-Studio-Companion-Windows
+```
+
+It contains a standalone `PersistentAIVideoStudioCompanion.exe` plus installer/runner/uninstaller scripts. **Node.js is not required on the target PC.**
+
+After extracting the artifact, verify it:
+
+```powershell
+.\PersistentAIVideoStudioCompanion.exe --version
+```
+
+Then install:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+The installer asks for the app URL, device name, media root, and `COMPANION_TOKEN`. The token is stored with Windows DPAPI for the current Windows user.
+
+Because the GitHub Actions executable is currently unsigned, Windows SmartScreen may warn on first launch. Code signing can be added later for production distribution.
+
+## Development fallback: Node-based installer
+
+The repository also keeps a Node-based companion installer for development and troubleshooting.
+
+Requirements:
 
 - Windows 10/11
 - Node.js 22 or newer
 - A reachable Persistent AI Video Studio server
 - The same `COMPANION_TOKEN` configured on that server
 
-## Install
-
-From the repository directory in PowerShell or Command Prompt:
+From the repository directory:
 
 ```powershell
 npm run companion:windows:install
@@ -33,8 +61,6 @@ Installed runtime files live under:
 ```text
 %LOCALAPPDATA%\PersistentAIVideoStudio\
 ```
-
-The installer copies the current `companion/index.mjs` there, stores the non-secret configuration plus the DPAPI-protected token, adds a Startup-folder launcher, and starts the companion immediately.
 
 ## Startup behavior
 
@@ -64,28 +90,31 @@ The local device ID remains persisted inside the configured media root by the co
 
 ## Update
 
-Pull the latest repository version, then run the installer again:
+For the standalone package, download the newest GitHub Actions artifact and run its `install.ps1` again. The installer stops only the previously installed companion executable before replacing it.
+
+For the Node development path, pull the latest repository version and run:
 
 ```powershell
 npm run companion:windows:install
 ```
 
-Reinstall stops the previously installed companion copy before replacing it, then starts the new copy. Your media folder is not modified.
+Your configured media folder is not modified by either update path.
 
 ## Uninstall
+
+Standalone artifact:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
+```
+
+Node development path:
 
 ```powershell
 npm run companion:windows:uninstall
 ```
 
-Uninstall removes:
-
-- Startup launcher
-- installed companion runtime copy
-- DPAPI-protected companion config
-- companion log/config directory
-
-It **does not delete the configured media root or generated videos**.
+Uninstall removes the Startup launcher, installed companion runtime, DPAPI-protected config, and companion app directory. It **does not delete the configured media root or generated videos**.
 
 ## Security model
 
