@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "db:bootstrap": "node scripts/db-bootstrap.mjs",
     "companion": "node companion/index.mjs"
