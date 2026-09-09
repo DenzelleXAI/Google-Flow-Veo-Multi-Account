@@ -14,11 +14,11 @@ import { resolveGoogleProfile } from "./provider-profiles";
 import { createVeoClient, downloadVeoVideo, pollVeoOperation, submitVeoGeneration } from "./providers/veo";
 import { downloadRelayObject, uploadVideoToRelay } from "./r2";
 
-async function loadVeoInputAssets(job: any) {
+async function loadVeoInputs(job: any) {
   const inputs = Array.isArray(job.inputs) ? job.inputs : [];
 
-  async function load(input: any) {
-    if (!input?.r2_key) {
+  async function loadImage(input: any) {
+    if (!input?.r2_key || input.relay_deleted_at) {
       throw new NonRetriableError(`Asset ${input?.asset_id ?? "unknown"} is not available in R2.`);
     }
     if (!input?.mime_type?.startsWith("image/")) {
@@ -30,8 +30,22 @@ async function loadVeoInputAssets(job: any) {
     };
   }
 
+  async function loadVideo(input: any) {
+    if (!input?.r2_key || input.relay_deleted_at) {
+      throw new NonRetriableError(`Extension source ${input?.asset_id ?? "unknown"} is not available in R2.`);
+    }
+    if (input.type !== "GENERATED_VIDEO" || !input?.mime_type?.startsWith("video/")) {
+      throw new NonRetriableError("Veo extension source must be an app-recorded generated video.");
+    }
+    return {
+      bytes: await downloadRelayObject(input.r2_key),
+      mimeType: input.mime_type,
+    };
+  }
+
   const initial = inputs.find((item: any) => item.role === "initial_frame");
   const last = inputs.find((item: any) => item.role === "last_frame");
+  const extension = inputs.find((item: any) => item.role === "extension_source");
   const references = inputs
     .filter((item: any) => item.role === "reference_asset")
     .sort((a: any, b: any) => Number(a.sort_order) - Number(b.sort_order));
@@ -39,11 +53,18 @@ async function loadVeoInputAssets(job: any) {
   if (references.length > 3) {
     throw new NonRetriableError("Veo supports at most three reference images.");
   }
+  if (job.generation_mode === "extend" && !extension) {
+    throw new NonRetriableError("Extension job has no frozen source video.");
+  }
+  if (job.generation_mode !== "extend" && extension) {
+    throw new NonRetriableError("A normal generation cannot contain an extension source.");
+  }
 
   return {
-    initialFrame: initial ? await load(initial) : null,
-    lastFrame: last ? await load(last) : null,
-    referenceImages: await Promise.all(references.map(load)),
+    initialFrame: initial ? await loadImage(initial) : null,
+    lastFrame: last ? await loadImage(last) : null,
+    referenceImages: await Promise.all(references.map(loadImage)),
+    extensionVideo: extension ? await loadVideo(extension) : null,
   };
 }
 
@@ -62,12 +83,12 @@ export const submitVeoGenerationJob = inngest.createFunction(
       return found;
     });
 
-    if (["cloud_ready", "provider_pending", "cancelled"].includes(job.status)) {
+    if (["cloud_ready", "local_confirmed", "provider_pending", "cancelled"].includes(job.status)) {
       return { jobId, status: job.status, skipped: true };
     }
 
     const resolved = await resolveGoogleProfile(job.requested_api_profile_id);
-    const veoInputs = await loadVeoInputAssets(job);
+    const veoInputs = await loadVeoInputs(job);
 
     const attempt = await step.run("start-attempt", async () => {
       await updateGenerationStatus(jobId, "submitting");
@@ -83,9 +104,11 @@ export const submitVeoGenerationJob = inngest.createFunction(
           prompt: job.prompt_snapshot,
           aspectRatio: job.aspect_ratio_snapshot,
           resolution: job.resolution_snapshot,
+          durationSeconds: job.duration_seconds_snapshot,
           initialFrame: veoInputs.initialFrame,
           lastFrame: veoInputs.lastFrame,
           referenceImages: veoInputs.referenceImages,
+          extensionVideo: veoInputs.extensionVideo,
         });
 
         const name = submitted.operation?.name;
@@ -145,7 +168,7 @@ export const monitorVeoGeneration = inngest.createFunction(
       return found;
     });
 
-    if (["cloud_ready", "cancelled"].includes(job.status)) {
+    if (["cloud_ready", "local_confirmed", "cancelled"].includes(job.status)) {
       return { jobId, status: job.status, skipped: true };
     }
 
