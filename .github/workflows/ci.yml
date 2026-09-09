@@ -40,6 +40,24 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Validate Windows companion PowerShell
+        shell: pwsh
+        run: |
+          $files = @(
+            "companion/windows/install.ps1",
+            "companion/windows/run.ps1",
+            "companion/windows/uninstall.ps1"
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($file, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "$file: $($_.Message)" }
+              exit 1
+            }
+          }
+
       - name: Bootstrap CI database
         run: npm run db:bootstrap
 
