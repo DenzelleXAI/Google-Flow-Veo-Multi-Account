@@ -96,17 +96,36 @@ export const submitVeoGenerationJob = inngest.createFunction(
       return found;
     });
 
-    if (["cloud_ready", "local_confirmed", "provider_pending", "cancelled"].includes(job.status)) {
-      return { jobId, status: job.status, skipped: true };
+    const knownProviderAttempt = job.attempts.find((attempt) => Boolean(attempt.provider_operation_id));
+    if (knownProviderAttempt) {
+      return {
+        jobId,
+        status: job.status,
+        skipped: true,
+        reason: "provider-operation-already-exists",
+        attemptId: knownProviderAttempt.id,
+      };
+    }
+
+    if (!["queued", "failed_retryable"].includes(job.status)) {
+      return { jobId, status: job.status, skipped: true, reason: "job-state-not-submittable" };
     }
 
     const resolved = await resolveGoogleProfile(job.requested_api_profile_id);
     const veoInputs = await loadVeoInputs(job);
 
-    const attempt = await step.run("start-attempt", async () => {
-      await updateGenerationStatus(jobId, "submitting");
-      return startAttempt(jobId, resolved.profile.id, job.model_id);
-    });
+    let attempt: Awaited<ReturnType<typeof startAttempt>>;
+    try {
+      attempt = await step.run("start-attempt", async () => {
+        await updateGenerationStatus(jobId, "submitting");
+        return startAttempt(jobId, resolved.profile.id, job.model_id);
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to create provider attempt";
+      await updateGenerationStatus(jobId, "failed_retryable")
+        .catch((markError) => console.error("Failed to mark pre-submit failure retryable", markError));
+      throw new NonRetriableError(`Pre-submit setup failed before provider execution: ${message}`);
+    }
 
     let operationName: string;
     try {
