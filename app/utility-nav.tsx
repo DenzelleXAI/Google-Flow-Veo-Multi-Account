@@ -9,6 +9,7 @@ export default function UtilityNav() {
   return (
     <nav className="utility-nav" aria-label="Studio utility navigation">
       <a href="/">Workspace</a>
+      <a href="/assets">Assets</a>
       <a href="/generations">History</a>
       <a href="/extensions">Extensions</a>
       <a href="/setup">Setup</a>
