@@ -28,6 +28,34 @@ type ApiProfile = {
   enabled: boolean;
 };
 
+type ExtensionPreflight = {
+  ok: boolean;
+  parentJobId: string;
+  expectedOutputDurationSeconds: number | null;
+  extensionDepth: number | null;
+  sourceReferenceExpiresAt: string | null;
+  checks: Array<{ code: string; ok: boolean; message: string }>;
+  generation: {
+    usage: {
+      daily: number;
+      dailyLimit: number;
+      monthly: number;
+      monthlyLimit: number;
+      dailyReservedUsd: number;
+      dailySpendLimitUsd: number;
+      monthlyReservedUsd: number;
+      monthlySpendLimitUsd: number;
+    };
+    cost: {
+      estimatedRequestUsd: number;
+      perRequestLimitUsd: number;
+      projectedDailyUsd: number;
+      projectedMonthlyUsd: number;
+      pricingVersion: string;
+    } | null;
+  } | null;
+};
+
 const extensionModels = (Object.entries(veoModels) as Array<[VeoModelId, (typeof veoModels)[VeoModelId]]>)
   .filter(([, capability]) => capability.supportsExtension)
   .map(([id, capability]) => ({ id, label: capability.label }));
@@ -54,6 +82,16 @@ function labelForStatus(status: string) {
   return status.replaceAll("_", " ");
 }
 
+function formatUsd(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? `$${value.toFixed(2)}` : "—";
+}
+
+function formatDate(value: string | null | undefined) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
+}
+
 export default function ExtensionManager() {
   const [jobs, setJobs] = useState<GenerationJob[]>([]);
   const [profiles, setProfiles] = useState<ApiProfile[]>([]);
@@ -64,6 +102,8 @@ export default function ExtensionManager() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
+  const [preflight, setPreflight] = useState<ExtensionPreflight | null>(null);
+  const [preflightLoading, setPreflightLoading] = useState(false);
   const pendingRequestIds = useRef<Record<string, string>>({});
 
   const selectedJob = useMemo(
@@ -71,6 +111,8 @@ export default function ExtensionManager() {
     [jobs, selectedJobId],
   );
   const selectedEligibility = selectedJob ? eligibility(selectedJob) : "Choose a completed 720p generation.";
+  const blockingChecks = preflight?.checks.filter((check) => !check.ok) ?? [];
+  const preflightReady = Boolean(preflight?.ok && !selectedEligibility);
 
   async function refresh() {
     try {
@@ -104,8 +146,44 @@ export default function ExtensionManager() {
     return () => window.clearInterval(timer);
   }, [jobs]);
 
+  useEffect(() => {
+    if (!selectedJobId) {
+      setPreflight(null);
+      return;
+    }
+
+    let cancelled = false;
+    setPreflightLoading(true);
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/generations/${selectedJobId}/extend/preflight`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            modelId,
+            requestedApiProfileId: selectedProfileId || null,
+          }),
+        });
+        const data = await response.json().catch(() => null);
+        if (!cancelled) {
+          if (data && Array.isArray(data.checks)) setPreflight(data as ExtensionPreflight);
+          else setPreflight(null);
+        }
+      } catch {
+        if (!cancelled) setPreflight(null);
+      } finally {
+        if (!cancelled) setPreflightLoading(false);
+      }
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [selectedJobId, selectedProfileId, modelId]);
+
   async function extendSelected() {
-    if (!selectedJob || selectedEligibility || submitting) return;
+    if (!selectedJob || selectedEligibility || !preflightReady || submitting) return;
     const capability = veoModels[modelId];
     if (!capability.supportsExtension) {
       setMessage(`${capability.label} does not support extension.`);
@@ -190,7 +268,7 @@ export default function ExtensionManager() {
                     {" · "}{job.expected_output_duration_seconds ?? "—"}s combined
                   </div>
                   <small className={reason ? styles.blocked : styles.ready}>
-                    {reason ?? "Eligible for another extension"}
+                    {reason ?? "Eligible for extension preflight"}
                   </small>
                 </button>
               );
@@ -243,19 +321,56 @@ export default function ExtensionManager() {
             </div>
           )}
 
+          <div className={styles.preflight}>
+            <div className={styles.preflightHeading}>
+              <strong>Non-billable preflight</strong>
+              <span className={preflightLoading ? styles.checking : preflightReady ? styles.readyBadge : styles.blockedBadge}>
+                {preflightLoading ? "Checking…" : preflightReady ? "Ready" : "Blocked"}
+              </span>
+            </div>
+
+            {preflight?.generation?.cost && (
+              <div className={styles.costGrid}>
+                <div><small>Request</small><strong>{formatUsd(preflight.generation.cost.estimatedRequestUsd)}</strong></div>
+                <div><small>Per-request cap</small><strong>{formatUsd(preflight.generation.cost.perRequestLimitUsd)}</strong></div>
+                <div><small>Projected today</small><strong>{formatUsd(preflight.generation.cost.projectedDailyUsd)}</strong></div>
+                <div><small>Daily cap</small><strong>{formatUsd(preflight.generation.usage.dailySpendLimitUsd)}</strong></div>
+                <div><small>Projected month</small><strong>{formatUsd(preflight.generation.cost.projectedMonthlyUsd)}</strong></div>
+                <div><small>Monthly cap</small><strong>{formatUsd(preflight.generation.usage.monthlySpendLimitUsd)}</strong></div>
+              </div>
+            )}
+
+            {preflight?.sourceReferenceExpiresAt && (
+              <div className={styles.freshness}>
+                <small>Provider extension window</small>
+                <strong>Fresh until {formatDate(preflight.sourceReferenceExpiresAt)}</strong>
+              </div>
+            )}
+
+            {!!blockingChecks.length && (
+              <div className={styles.blockers}>
+                {blockingChecks.map((check) => <div key={check.code}>✕ {check.message}</div>)}
+              </div>
+            )}
+
+            {preflight && !blockingChecks.length && (
+              <div className={styles.passChecks}>✓ Source, model, profile, budget, device, and provider window passed.</div>
+            )}
+          </div>
+
           <button
             className={styles.extendButton}
             onClick={() => void extendSelected()}
-            disabled={!selectedJob || Boolean(selectedEligibility) || submitting}
+            disabled={!selectedJob || Boolean(selectedEligibility) || !preflightReady || preflightLoading || submitting}
           >
-            {submitting ? "Creating extension…" : "Extend +7 seconds"}
+            {submitting ? "Creating extension…" : preflightLoading ? "Checking readiness…" : "Extend +7 seconds"}
           </button>
 
           {selectedEligibility && <p className={styles.warning}>{selectedEligibility}</p>}
           {message && <p className={styles.message}>{message}</p>}
 
           <p className={styles.note}>
-            Spend is reserved conservatively as an 8-second 720p request before the job is queued. The provider submission still uses the same ambiguous-submission protection as normal generations.
+            Preflight is read-only and does not pin R2, create a job, dispatch Inngest, or call Veo. The source is pinned only when the explicit extension request is accepted by the server.
           </p>
         </section>
       </div>
