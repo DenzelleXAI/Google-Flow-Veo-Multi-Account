@@ -1,0 +1,400 @@
+.page {
+  min-height: 100vh;
+  padding: 32px 32px 96px;
+  background: #0b0d10;
+  color: #f6f7f8;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin: 0 auto 24px;
+  max-width: 1500px;
+}
+
+.header h1,
+.detailHeader h2 {
+  margin: 4px 0 8px;
+  letter-spacing: -0.035em;
+}
+
+.header p:not(.eyebrow) {
+  max-width: 820px;
+  margin: 0;
+  color: #9fa6b2;
+  line-height: 1.55;
+}
+
+.eyebrow {
+  margin: 0;
+  color: #7e8a99;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.refreshButton,
+.actions button,
+.actions a {
+  border: 1px solid #303640;
+  border-radius: 10px;
+  background: #171b20;
+  color: #f6f7f8;
+  padding: 10px 14px;
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.refreshButton:hover,
+.actions button:hover,
+.actions a:hover {
+  background: #20262d;
+}
+
+.refreshButton:disabled,
+.actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.error,
+.warning {
+  max-width: 1500px;
+  margin: 0 auto 18px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.error {
+  border: 1px solid #6b2d35;
+  background: #2a1519;
+  color: #ffc2c9;
+}
+
+.warning {
+  margin: 16px 0 0;
+  border: 1px solid #67531f;
+  background: #292311;
+  color: #f6d779;
+}
+
+.toolbar {
+  max-width: 1500px;
+  margin: 0 auto 16px;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  color: #8d96a2;
+  font-size: 13px;
+}
+
+.toolbar label {
+  display: grid;
+  gap: 6px;
+}
+
+.toolbar select {
+  min-width: 220px;
+  border: 1px solid #2d333b;
+  border-radius: 9px;
+  background: #15191e;
+  color: #eef1f4;
+  padding: 9px 10px;
+}
+
+.layout {
+  max-width: 1500px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(290px, 380px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.listPanel,
+.detailPanel {
+  border: 1px solid #242a31;
+  border-radius: 14px;
+  background: #101318;
+}
+
+.listPanel {
+  max-height: calc(100vh - 220px);
+  overflow: auto;
+  padding: 8px;
+}
+
+.detailPanel {
+  min-height: 540px;
+  padding: 22px;
+}
+
+.jobCard {
+  width: 100%;
+  display: grid;
+  gap: 8px;
+  margin: 0 0 6px;
+  padding: 13px;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: #d9dde3;
+  cursor: pointer;
+}
+
+.jobCard:hover {
+  background: #161b21;
+}
+
+.jobCard.selected {
+  border-color: #46515e;
+  background: #1a2027;
+}
+
+.jobTopline,
+.jobMeta,
+.recordTitle,
+.assetRow,
+.detailHeader,
+.actions,
+.outputMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.jobTopline strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jobCard > span,
+.jobMeta,
+.assetRow span,
+.recordTitle span {
+  color: #8c96a2;
+  font-size: 12px;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border: 1px solid #3a424d;
+  border-radius: 999px;
+  padding: 4px 7px;
+  color: #b9c1cc;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+}
+
+.cloud_ready,
+.local_confirmed {
+  border-color: #2d684d;
+  color: #7ce6ae;
+}
+
+.queued,
+.submitting,
+.provider_pending,
+.downloading_from_provider,
+.uploading_relay {
+  border-color: #4a5f88;
+  color: #a9c4ff;
+}
+
+.failed_retryable {
+  border-color: #765f28;
+  color: #f3cf73;
+}
+
+.failed_ambiguous,
+.failed_final {
+  border-color: #74363d;
+  color: #ff9ba6;
+}
+
+.detailHeader {
+  align-items: flex-start;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #232930;
+}
+
+.detailHeader h2 {
+  max-width: 760px;
+}
+
+.actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 18px 0 4px;
+}
+
+.metrics > div {
+  display: grid;
+  gap: 6px;
+  min-height: 72px;
+  padding: 12px;
+  border: 1px solid #262d35;
+  border-radius: 10px;
+  background: #14181d;
+}
+
+.metrics span {
+  color: #818b97;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.metrics strong {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.section {
+  margin-top: 22px;
+}
+
+.section h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+
+.section pre {
+  margin: 0;
+  padding: 14px;
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid #262d35;
+  border-radius: 10px;
+  background: #0d1014;
+  color: #cbd1d9;
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.record,
+.assetRow {
+  padding: 12px;
+  margin-bottom: 8px;
+  border: 1px solid #262d35;
+  border-radius: 10px;
+  background: #14181d;
+}
+
+.record dl {
+  display: grid;
+  gap: 7px;
+  margin: 12px 0 0;
+}
+
+.record dl div {
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr);
+  gap: 10px;
+  font-size: 12px;
+}
+
+.record dt {
+  color: #7f8995;
+}
+
+.record dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #c9cfd7;
+}
+
+.recordError {
+  margin: 10px 0 0;
+  color: #ff9ba6;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.assetRow > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.assetRow strong {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.outputMeta {
+  flex-shrink: 0;
+}
+
+.outputMeta code {
+  color: #8ea1b5;
+  font-size: 11px;
+}
+
+.empty {
+  margin: 0;
+  padding: 18px;
+  color: #7f8995;
+  font-size: 13px;
+}
+
+@media (max-width: 920px) {
+  .page {
+    padding: 20px 16px 90px;
+  }
+
+  .header,
+  .detailHeader {
+    flex-direction: column;
+  }
+
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .listPanel {
+    max-height: 360px;
+  }
+
+  .metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .toolbar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .assetRow,
+  .jobMeta {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
