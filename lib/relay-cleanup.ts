@@ -10,9 +10,10 @@ type RelayCleanupCandidate = {
 export const cleanupVerifiedRelayObjects = inngest.createFunction(
   {
     id: "cleanup-verified-r2-relay-objects",
+    name: "Cleanup verified R2 relay objects",
+    triggers: { cron: "0 3 * * *" },
     retries: 3,
   },
-  { cron: "0 3 * * *" },
   async ({ step }) => {
     const candidates = await step.run("load-relay-cleanup-candidates", async () => {
       const sql = requireDb();
