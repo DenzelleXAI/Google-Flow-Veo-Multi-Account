@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import GenerationMediaPanel from "./generation-media-panel";
 import styles from "./generation-history.module.css";
 
 type GenerationListItem = {
@@ -345,6 +346,11 @@ export default function GenerationHistoryClient() {
                     </div>
                   </article>
                 ))}
+              </section>
+
+              <section className={styles.section}>
+                <h3>Media locality</h3>
+                <GenerationMediaPanel jobId={detail.id} />
               </section>
             </>
           ) : null}
