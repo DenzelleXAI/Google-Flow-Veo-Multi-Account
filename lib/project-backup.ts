@@ -35,8 +35,7 @@ export async function createProjectBackup(projectId: string) {
     sql`
       select id, type, filename, mime_type, relative_path, r2_key, sha256,
              file_size_bytes, width, height, duration_seconds,
-             relay_delete_after, relay_deleted_at, veo_reference_refreshed_at,
-             provider_reference_last_used_at, created_at
+             relay_delete_after, relay_deleted_at, veo_reference_refreshed_at, created_at
       from assets
       where project_id = ${projectId}
       order by created_at asc
@@ -97,10 +96,12 @@ export async function createProjectBackup(projectId: string) {
       order by created_at asc
     `,
     sql`
-      select id, api_profile_id, query, mode, summary, search_queries, created_at
-      from research_sessions
-      where project_id = ${projectId}
-      order by created_at asc
+      select rs.id, ap.name as api_profile_name, rs.query, rs.mode, rs.summary,
+             rs.search_queries, rs.created_at
+      from research_sessions rs
+      left join api_profiles ap on ap.id = rs.api_profile_id
+      where rs.project_id = ${projectId}
+      order by rs.created_at asc
     `,
   ]);
 
@@ -132,7 +133,7 @@ export async function createProjectBackup(projectId: string) {
     exportedAt: new Date().toISOString(),
     security: {
       credentialsIncluded: false,
-      note: "Provider credentials, encrypted credentials, auth/session secrets, database credentials, R2 credentials, Inngest keys, and companion tokens are intentionally excluded.",
+      note: "Provider credentials, encrypted credentials, auth/session secrets, database credentials, relay credentials, Inngest keys, and companion tokens are intentionally excluded.",
     },
     project: { ...projectRows[0] },
     scenes: rowsToPlain(scenes),
