@@ -53,7 +53,7 @@ export async function getGenerationMediaState(jobId: string) {
       a.r2_key,
       a.relay_delete_after,
       a.relay_deleted_at,
-      a.provider_reference_last_used_at,
+      a.veo_reference_refreshed_at as provider_reference_last_used_at,
       a.sha256,
       a.file_size_bytes,
       a.duration_seconds,
