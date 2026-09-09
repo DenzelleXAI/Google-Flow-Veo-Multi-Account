@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, readFile, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { lstat, mkdir, readFile, realpath, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 import os from "node:os";
@@ -45,6 +45,7 @@ if (!token) {
 }
 
 await mkdir(mediaRoot, { recursive: true });
+const mediaRootReal = await realpath(mediaRoot);
 
 async function loadDeviceId() {
   if (configuredDeviceId) return configuredDeviceId;
@@ -95,11 +96,53 @@ async function heartbeat(deviceId) {
   return id;
 }
 
+function isInsideRoot(root, candidate) {
+  const rel = relative(root, candidate);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
 function safeTarget(relativePath) {
-  const candidate = resolve(mediaRoot, relativePath.split("/").join(process.platform === "win32" ? "\\" : "/"));
-  const rel = relative(mediaRoot, candidate);
-  if (rel.startsWith("..") || isAbsolute(rel)) throw new Error(`Unsafe media path: ${relativePath}`);
+  const candidate = resolve(mediaRoot, relativePath.split("/").join(sep));
+  if (!isInsideRoot(mediaRoot, candidate)) throw new Error(`Unsafe media path: ${relativePath}`);
   return candidate;
+}
+
+async function assertSafeParent(target) {
+  const parent = dirname(target);
+  if (!isInsideRoot(mediaRoot, parent)) throw new Error(`Unsafe media parent: ${parent}`);
+
+  // Inspect every already-existing segment before creating anything. On
+  // Windows, directory junctions and symbolic links are surfaced by lstat as
+  // link-like reparse points; realpath containment below is the final guard.
+  const rel = relative(mediaRoot, parent);
+  const segments = rel === "" ? [] : rel.split(sep).filter(Boolean);
+  let current = mediaRoot;
+  for (const segment of segments) {
+    current = join(current, segment);
+    try {
+      const info = await lstat(current);
+      if (info.isSymbolicLink()) {
+        const resolvedLink = await realpath(current);
+        if (!isInsideRoot(mediaRootReal, resolvedLink)) {
+          throw new Error(`Unsafe symlink/junction escapes media root: ${current}`);
+        }
+      } else if (!info.isDirectory()) {
+        throw new Error(`Media path component is not a directory: ${current}`);
+      }
+    } catch (error) {
+      if (error?.code === "ENOENT") break;
+      throw error;
+    }
+  }
+
+  await mkdir(parent, { recursive: true });
+
+  // Re-resolve after mkdir so an existing junction/symlink cannot redirect the
+  // actual write outside the configured canonical media root.
+  const resolvedParent = await realpath(parent);
+  if (!isInsideRoot(mediaRootReal, resolvedParent)) {
+    throw new Error(`Resolved media parent escapes configured root: ${parent}`);
+  }
 }
 
 async function sha256File(path) {
@@ -111,7 +154,7 @@ async function sha256File(path) {
 async function downloadAndVerify(deviceId, asset) {
   const target = safeTarget(asset.relativePath);
   const part = `${target}.part`;
-  await mkdir(dirname(target), { recursive: true });
+  await assertSafeParent(target);
 
   const existingHash = await sha256File(target).catch(() => null);
   if (existingHash === asset.sha256) {
@@ -132,6 +175,9 @@ async function downloadAndVerify(deviceId, asset) {
     throw new Error(`SHA-256 mismatch for ${asset.filename}`);
   }
 
+  // Re-check immediately before the final rename in case the directory tree
+  // was modified while the download was in progress.
+  await assertSafeParent(target);
   await rename(part, target);
   const file = await stat(target);
   await confirm(deviceId, asset, target, actualHash, file.size);
@@ -139,7 +185,7 @@ async function downloadAndVerify(deviceId, asset) {
 }
 
 async function confirm(deviceId, asset, target, hash, size) {
-  const relativePath = relative(mediaRoot, target).split(process.platform === "win32" ? "\\" : "/").join("/");
+  const relativePath = relative(mediaRoot, target).split(sep).join("/");
   await api(`/api/assets/${asset.assetId}/locations`, {
     method: "POST",
     body: JSON.stringify({
