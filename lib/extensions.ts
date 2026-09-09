@@ -41,14 +41,18 @@ export async function markExtensionSourceReferenced(extensionJobId: string) {
   const sql = requireDb();
   const rows = await sql`
     update assets a
-    set veo_reference_refreshed_at = now()
+    set veo_reference_refreshed_at = now(),
+        relay_delete_after = case
+          when a.relay_delete_after is null then null
+          else greatest(a.relay_delete_after, now() + interval '2 days')
+        end
     from generation_job_assets gja, generation_jobs j
     where gja.generation_job_id = ${extensionJobId}
       and gja.generation_job_id = j.id
       and gja.asset_id = a.id
       and gja.role = 'extension_source'
       and j.generation_mode = 'extend'
-    returning a.id, a.veo_reference_refreshed_at
+    returning a.id, a.veo_reference_refreshed_at, a.relay_delete_after
   `;
   return rows[0] ?? null;
 }
