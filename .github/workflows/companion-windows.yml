@@ -1,0 +1,55 @@
+name: Windows Companion
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "companion/**"
+      - ".github/workflows/companion-windows.yml"
+
+jobs:
+  build-windows-companion:
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 26
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+
+      - name: Build standalone companion
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          node --build-sea .\companion\index.mjs --output .\dist\PersistentAIVideoStudioCompanion.exe
+
+      - name: Verify executable
+        shell: pwsh
+        run: |
+          $output = & .\dist\PersistentAIVideoStudioCompanion.exe --version
+          Write-Host $output
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($output -notmatch "Persistent AI Video Studio Companion") {
+            throw "Unexpected companion version output."
+          }
+
+      - name: Package Windows companion
+        shell: pwsh
+        run: |
+          Copy-Item companion\windows\install-standalone.ps1 dist\install.ps1
+          Copy-Item companion\windows\run-standalone.ps1 dist\run.ps1
+          Copy-Item companion\windows\uninstall-standalone.ps1 dist\uninstall.ps1
+          Copy-Item companion\windows\README-STANDALONE.md dist\README.txt
+
+      - name: Upload standalone companion artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Persistent-AI-Video-Studio-Companion-Windows
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
