@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: persistent-ai-video-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: flow
+      POSTGRES_PASSWORD: flow_local_dev
+      POSTGRES_DB: flow_studio
+    ports:
+      - "54329:5432"
+    volumes:
+      - flow_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flow -d flow_studio"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  flow_postgres_data:
