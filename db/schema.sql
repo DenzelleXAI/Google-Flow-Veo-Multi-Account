@@ -58,6 +58,8 @@ create table if not exists assets (
   mime_type text,
   relative_path text,
   r2_key text,
+  relay_delete_after timestamptz,
+  relay_deleted_at timestamptz,
   sha256 text,
   file_size_bytes bigint,
   width integer,
@@ -67,6 +69,8 @@ create table if not exists assets (
 );
 
 alter table assets add column if not exists mime_type text;
+alter table assets add column if not exists relay_delete_after timestamptz;
+alter table assets add column if not exists relay_deleted_at timestamptz;
 
 create table if not exists asset_locations (
   id uuid primary key default gen_random_uuid(),
@@ -240,6 +244,7 @@ create table if not exists generation_outputs (
 create index if not exists idx_projects_workspace on projects(workspace_id);
 create index if not exists idx_scenes_project on scenes(project_id);
 create index if not exists idx_assets_project on assets(project_id);
+create index if not exists idx_assets_relay_cleanup on assets(type, relay_delete_after) where relay_deleted_at is null;
 create index if not exists idx_agent_messages_thread on agent_messages(thread_id, created_at);
 create index if not exists idx_research_sessions_project on research_sessions(project_id, created_at desc);
 create index if not exists idx_research_sources_session on research_sources(research_session_id);
