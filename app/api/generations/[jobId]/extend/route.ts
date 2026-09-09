@@ -5,6 +5,7 @@ import {
   getGenerationJob,
   updateGenerationStatus,
 } from "@/lib/generations";
+import { assertExtensionSourceFresh } from "@/lib/extensions";
 import { findGenerationJobByRequestId } from "@/lib/generation-idempotency";
 import {
   assertGenerationInfrastructureReady,
@@ -51,6 +52,7 @@ export async function POST(
       return NextResponse.json({ error: capabilityError }, { status: 400 });
     }
 
+    await assertExtensionSourceFresh(parent.id);
     await assertGenerationInfrastructureReady(requestedApiProfileId);
 
     const result = await createGenerationJob({
