@@ -5,11 +5,10 @@ import {
   assertGenerationInfrastructureReady,
   GenerationInfrastructureError,
 } from "@/lib/generation-infrastructure";
+import { decideGenerationRetry } from "@/lib/generation-retry-policy";
 import { getGenerationJob, updateGenerationStatus } from "@/lib/generations";
 import { inngest } from "@/lib/inngest";
 import { resolveGoogleProfile } from "@/lib/provider-profiles";
-
-const retryableStatuses = new Set(["failed_retryable", "queued"]);
 
 export async function POST(
   _request: Request,
@@ -20,29 +19,19 @@ export async function POST(
     const job = await getGenerationJob(jobId);
     if (!job) return NextResponse.json({ error: "Generation job not found" }, { status: 404 });
 
-    if (job.status === "failed_ambiguous") {
-      return NextResponse.json(
-        {
-          error:
-            "This provider submission is ambiguous and cannot be retried on the same job. The provider may already have accepted a billable generation. Inspect the attempt before intentionally creating a new Generate action.",
-          code: "AMBIGUOUS_SUBMISSION_NO_RETRY",
-        },
-        { status: 409 },
-      );
+    const decision = decideGenerationRetry(job);
+    if (decision.action === "block") {
+      const error = decision.code === "AMBIGUOUS_SUBMISSION_NO_RETRY"
+        ? "This provider submission is ambiguous and cannot be retried on the same job. The provider may already have accepted a billable generation. Inspect the attempt before intentionally creating a new Generate action."
+        : decision.reason;
+      return NextResponse.json({ error, code: decision.code }, { status: 409 });
     }
-
-    if (!retryableStatuses.has(job.status)) {
-      return NextResponse.json({ error: `Job in ${job.status} state cannot be retried.` }, { status: 409 });
-    }
-
-    const latestAttempt = [...job.attempts].sort(
-      (a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime(),
-    )[0];
 
     // If we already know the provider operation ID, provider submission has
     // happened. Retry means resume monitoring/download/relay only; never call
     // generateVideos again for this logical job.
-    if (latestAttempt?.provider_operation_id) {
+    if (decision.action === "resume_monitor") {
+      const latestAttempt = decision.attempt;
       await assertGenerationInfrastructureReady(job.requested_api_profile_id);
       const resolved = latestAttempt.api_profile_id
         ? await resolveGoogleProfile(latestAttempt.api_profile_id)
