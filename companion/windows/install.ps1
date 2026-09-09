@@ -25,6 +25,13 @@ $startupCmd = Join-Path $startupDir "Persistent AI Video Studio Companion.cmd"
 
 New-Item -ItemType Directory -Force -Path $appDir | Out-Null
 
+# Reinstall/update should never leave two companion loops running.
+Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
+  Where-Object { $_.CommandLine -and $_.CommandLine.Contains($companionCopy) } |
+  ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+  }
+
 $defaultUrl = "http://localhost:3000"
 $appUrl = Read-Host "App URL [$defaultUrl]"
 if ([string]::IsNullOrWhiteSpace($appUrl)) { $appUrl = $defaultUrl }
