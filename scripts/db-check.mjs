@@ -32,6 +32,19 @@ const requiredTables = [
   "research_sources",
 ];
 
+const requiredColumns = [
+  ["assets", "mime_type"],
+  ["assets", "relay_delete_after"],
+  ["assets", "relay_deleted_at"],
+  ["assets", "veo_reference_refreshed_at"],
+  ["generation_jobs", "generation_mode"],
+  ["generation_jobs", "extension_depth"],
+  ["generation_jobs", "expected_output_duration_seconds"],
+  ["workspace_settings", "daily_spend_limit_usd"],
+  ["workspace_settings", "monthly_spend_limit_usd"],
+  ["workspace_settings", "per_request_spend_limit_usd"],
+];
+
 try {
   const rows = await sql`
     select table_name
@@ -40,15 +53,48 @@ try {
       and table_name = any(${requiredTables})
   `;
   const found = new Set(rows.map((row) => String(row.table_name)));
-  const missing = requiredTables.filter((name) => !found.has(name));
+  const missingTables = requiredTables.filter((name) => !found.has(name));
 
-  if (missing.length) {
-    console.error(`Database is reachable but schema is incomplete. Missing: ${missing.join(", ")}`);
+  const columnRows = await sql`
+    select table_name, column_name
+    from information_schema.columns
+    where table_schema = 'public'
+  `;
+  const foundColumns = new Set(
+    columnRows.map((row) => `${String(row.table_name)}.${String(row.column_name)}`),
+  );
+  const missingColumns = requiredColumns
+    .map(([table, column]) => `${table}.${column}`)
+    .filter((name) => !foundColumns.has(name));
+
+  const fkRows = await sql`
+    select condeferrable, condeferred
+    from pg_constraint
+    where conrelid = 'generation_job_assets'::regclass
+      and conname = 'generation_job_assets_asset_id_fkey'
+      and contype = 'f'
+    limit 1
+  `;
+  const inputAssetFk = fkRows[0];
+  const deferredInputAssetFk = Boolean(inputAssetFk?.condeferrable && inputAssetFk?.condeferred);
+
+  if (missingTables.length || missingColumns.length || !deferredInputAssetFk) {
+    if (missingTables.length) {
+      console.error(`Database is reachable but schema is incomplete. Missing tables: ${missingTables.join(", ")}`);
+    }
+    if (missingColumns.length) {
+      console.error(`Database is reachable but schema is incomplete. Missing columns: ${missingColumns.join(", ")}`);
+    }
+    if (!deferredInputAssetFk) {
+      console.error("generation_job_assets_asset_id_fkey must be DEFERRABLE INITIALLY DEFERRED.");
+    }
     process.exitCode = 1;
   } else {
     const version = await sql`select version()`;
     console.log("Database connection: OK");
     console.log(`Schema tables: ${requiredTables.length}/${requiredTables.length} present`);
+    console.log(`Critical columns: ${requiredColumns.length}/${requiredColumns.length} present`);
+    console.log("Generation input asset FK: DEFERRABLE INITIALLY DEFERRED");
     console.log(`Server: ${String(version[0]?.version ?? "PostgreSQL")}`);
   }
 } finally {
