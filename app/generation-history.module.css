@@ -38,7 +38,8 @@
 
 .refreshButton,
 .actions button,
-.actions a {
+.actions a,
+.mediaActions button {
   border: 1px solid #303640;
   border-radius: 10px;
   background: #171b20;
@@ -51,12 +52,14 @@
 
 .refreshButton:hover,
 .actions button:hover,
-.actions a:hover {
+.actions a:hover,
+.mediaActions button:hover {
   background: #20262d;
 }
 
 .refreshButton:disabled,
-.actions button:disabled {
+.actions button:disabled,
+.mediaActions button:disabled {
   opacity: 0.5;
   cursor: default;
 }
@@ -365,6 +368,23 @@
   margin-bottom: 0;
 }
 
+.mediaActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.mediaActions button {
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+.mediaActions span {
+  color: #7f8995;
+  font-size: 11px;
+}
+
 .replicaList {
   display: grid;
   gap: 7px;
@@ -467,7 +487,8 @@
 
   .assetRow,
   .jobMeta,
-  .replicaRow {
+  .replicaRow,
+  .mediaActions {
     align-items: flex-start;
     flex-direction: column;
   }
