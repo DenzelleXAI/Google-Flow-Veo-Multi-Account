@@ -4,32 +4,70 @@ Flow-inspired AI video workspace where project state belongs to the application,
 
 ## Core guarantee
 
-Changing API profiles must never reset projects, prompts, scenes, assets, agent history, generation jobs, or outputs.
+Changing Google API profiles must never reset projects, prompts, scenes, assets, research, Agent history, generation jobs, attempts, outputs, or local-media verification state.
+
+**Provider executes work; provider does not own work.**
 
 ## Current architecture
 
-- **Next.js UI/API** — projects, scenes, prompts, profile selection, safety controls, generation history, and persistent Agent UI.
-- **PostgreSQL** — source of truth for projects, prompts, devices, assets, profiles, agent history, jobs, attempts, outputs, and per-device media locations.
-- **Inngest** — durable Veo submission, provider polling, and relay ingestion.
-- **Cloudflare R2** — transient safety relay for inputs and completed generations while target PCs may be offline.
-- **Desktop companion** — heartbeats a device, downloads targeted R2 outputs, verifies SHA-256, and reports verified local copies.
-- **Local media folder** — intended permanent master media copy on each device.
-- **Optional OneDrive / Google Drive / Syncthing / NAS** — replication between local devices after the app has verified its own target copy.
-- **Gemini + Veo** — execution providers only; they never own project state.
+- **Next.js 16 UI/API** — workspace, scene settings, generation controls, Profiles, Setup, Extensions, persistent Agent, and research APIs.
+- **PostgreSQL** — source of truth for project state, prompt history, devices, assets, API profiles, Agent history, research, generation jobs/attempts/outputs, budgets, and per-device replicas.
+- **Inngest** — durable non-paid monitoring, relay ingestion, monitor recovery, and relay cleanup. The paid Veo submit function is intentionally zero-retry.
+- **Cloudflare R2** — transient safety/working relay for input images, generated videos, extension sources, and outputs while local devices may be offline.
+- **Desktop companion** — heartbeats a device, downloads targeted R2 outputs, verifies SHA-256, stores canonical local files, and reports verified replicas.
+- **Local media folder** — intended long-term master media storage.
+- **Optional OneDrive / Google Drive / Syncthing / NAS** — device-to-device media replication; every receiving device must still verify the actual local file hash.
+- **Gemini + Veo** — reasoning/generation providers only; provider profile changes never change project identity.
+
+## PostgreSQL is provider-independent
+
+Supabase is **not required**. The application uses PostgreSQL directly through `DATABASE_URL`.
+
+Supported development/deployment choices include:
+
+- Local PostgreSQL through the included Docker Compose stack
+- Neon or another managed PostgreSQL-compatible provider
+- Supabase Postgres when available
+
+Local database setup:
+
+```bash
+npm install
+npm run db:local:up
+npm run db:local:bootstrap
+```
+
+See [`DEVELOPMENT.md`](./DEVELOPMENT.md) for the complete local workflow.
 
 ## Media rule
 
-Media files are not stored inside PostgreSQL. PostgreSQL stores metadata, hashes, R2 keys, relative local paths, and per-device verification state.
+Large media blobs are never stored inside PostgreSQL. PostgreSQL stores metadata, hashes, R2 keys, relative local paths, relay-retention state, and per-device verification state.
 
-Generation path:
+Normal generation path:
 
-`Generate -> immutable job snapshot -> Veo -> durable monitor -> R2 -> companion -> SHA-256 verification -> LOCAL_CONFIRMED`
+```text
+Generate
+-> immutable job snapshot
+-> zero-retry paid Veo submit
+-> durable provider operation ID
+-> recoverable monitor
+-> R2 relay
+-> companion
+-> SHA-256 verification
+-> LOCAL_CONFIRMED
+```
 
-R2 is a transient relay, not the permanent archive. Configure an object lifecycle rule after deployment (for example 7–14 days) so cloud relay cost remains low while offline-device recovery remains possible.
+Canonical generated-video paths use stable IDs:
+
+```text
+media/<workspace_id>/outputs/<generation_job_id>/<asset_id>.mp4
+```
+
+Project renames therefore do not move or invalidate canonical files.
 
 ## Generation lifecycle
 
-Implemented cloud/device states include:
+Cloud/device states include:
 
 1. `QUEUED`
 2. `SUBMITTING`
@@ -41,8 +79,8 @@ Implemented cloud/device states include:
 
 Failure states:
 
-- `FAILED_AMBIGUOUS` — Veo may have accepted a paid request but the operation ID was not safely confirmed. Never auto-resubmit this state.
-- `FAILED_RETRYABLE`
+- `FAILED_AMBIGUOUS` — provider may already have accepted a billable request; same-job provider retry is prohibited.
+- `FAILED_RETRYABLE` — retry policy decides whether to resume a known provider operation or safely submit when no operation exists.
 - `FAILED_FINAL`
 - `CANCELLED`
 
@@ -50,65 +88,160 @@ Failure states:
 
 ### Idempotency
 
-One `generation_request_id` represents one logical Generate action. PostgreSQL enforces:
+One `generation_request_id` represents one logical intentional Generate/Extend action. PostgreSQL enforces:
 
-`UNIQUE(workspace_id, generation_request_id)`
+```text
+UNIQUE(workspace_id, generation_request_id)
+```
+
+Network/API retries reuse the same logical job. An intentional new Generate action must create a new request ID.
 
 ### Immutable generation inputs
 
-A job freezes the prompt, aspect ratio, duration, resolution, model, selected API profile, target device, and image inputs at creation time.
+A generation freezes:
 
-### Atomic generation caps
+- prompt
+- aspect ratio
+- duration
+- resolution
+- model
+- selected API profile
+- target device
+- initial/last/reference assets
+- extension parent/source where applicable
 
-`workspace_settings` is locked during job creation. The server checks daily/monthly limits before inserting the queued job, preventing simultaneous requests from racing through the cap.
+Changing the scene later cannot mutate already-created paid work.
 
-Defaults:
+### Spend and count hard stops
 
-- 10 generations/day
-- 100 generations/month
-- 30 GB minimum reserved free disk on a freshly reporting target device
-- 5-minute device freshness window
+`workspace_settings` is locked during job creation so concurrent requests cannot race through limits.
 
-These values are configurable through the workspace safety settings API/UI.
+Initial defaults:
 
-### Device disk behavior
+```text
+10 generations/day
+100 generations/month
+$5.00/request
+$20.00/day
+$100.00/month
+30 GB minimum local free-space reserve
+5-minute device freshness window
+```
 
-A freshly reporting target device with less than the configured free-space reserve blocks generation before queueing.
+Veo request cost is estimated before queueing and stored with a pricing-version identifier.
 
-An offline/stale target device does **not** block generation because R2 remains the safe landing zone. The companion downloads it when the device returns online.
+Ambiguous jobs remain conservatively counted because they may already be billable.
 
-### Ambiguous provider submissions
+### Zero-retry paid submission
 
-Veo submission and Veo monitoring are separate durable functions. If the provider-acceptance outcome is uncertain, the job becomes `FAILED_AMBIGUOUS` instead of being automatically resubmitted.
+The Inngest function that calls `generateVideos` has `retries: 0`.
+
+A submit worker also refuses to call the provider if **any attempt for that job already has a provider operation ID**, protecting against late or replayed submit events.
+
+Once an operation ID is known:
+
+```text
+retry = resume monitoring
+NOT submit Veo again
+```
+
+`FAILED_AMBIGUOUS` can never retry the same logical paid job.
+
+### Monitor recovery
+
+Provider monitoring is non-paid and recoverable.
+
+- Immediate monitor events use deterministic event IDs.
+- A recovery cron scans persisted `PROVIDER_PENDING` attempts with operation IDs and re-emits monitor events when necessary.
+- Monitor retries reconcile any already-persisted output before downloading/storing another asset.
+
+This separates **paid submission exactly-once protection** from **recoverable non-paid monitoring**.
 
 ## API profiles
 
 Projects do not own provider profiles.
 
-Implemented profile behavior:
+Implemented behavior:
 
 - Environment-backed Google profile
-- AES-256-GCM encrypted user-managed credentials
+- AES-256-GCM encrypted user-managed profiles
 - Add profile
 - Test profile
-- Enable/disable backend support
-- Manual default/profile selection
-- Selected profile ID frozen onto each generation job and attempt
+- Enable / disable / re-enable
+- Set default
+- Manual per-generation selection
+- Selected profile ID frozen onto the generation job/attempt
 
-Switching profile never changes project state.
+Switching profiles changes execution credentials only.
 
-## Veo inputs
+## Veo generation inputs
 
-Implemented generation inputs:
+Implemented:
 
 - Text-to-video
 - Initial-frame image-to-video
-- Last frame plumbing
-- Up to three reference assets where the selected Veo model supports them
+- Last-frame interpolation
+- Up to three subject/product reference images where supported
 - PNG/JPEG/WebP upload to R2
-- Immutable asset IDs per generation
+- 9:16 / 16:9
+- 4 / 6 / 8 second generation where supported
+- 720p / 1080p / 4K according to current model capability
+- Capability-driven validation before paid queueing
 
-Model capability validation is centralized before queueing.
+Current app registry distinguishes:
+
+- **Veo 3.1 Standard** — 720p / 1080p / 4K; references; extension
+- **Veo 3.1 Fast** — 720p / 1080p / 4K; references; extension
+- **Veo 3.1 Lite** — 720p / 1080p; no reference-image mode; no extension
+
+1080p/4K and reference-image generation are constrained to 8 seconds by the current provider rules.
+
+## Veo extension workflow
+
+Open:
+
+```text
+/extensions
+```
+
+Extension is always an **explicit paid user action**.
+
+Implemented constraints:
+
+- Standard/Fast only
+- 720p source/output mode
+- provider API duration fixed to 8 seconds
+- provider adds 7 seconds to the combined video
+- source must be an app-recorded generated Veo video
+- source combined duration must be ≤141 seconds
+- maximum 20 extensions per lineage
+- final expected combined duration tracked in PostgreSQL
+- source asset frozen as `extension_source`
+- parent/child generation lineage persisted
+- spend reserved before queueing
+
+The app also enforces the provider's current two-day extension-reference window. A source referenced successfully for extension refreshes that provider-reference timestamp.
+
+## R2 relay retention
+
+R2 is transient, but extension-capable videos cannot be deleted too aggressively.
+
+After the **target device** verifies a generated output, deletion is scheduled no earlier than the later of:
+
+```text
+24-hour local recovery grace
+OR
+current Veo two-day extension-reference window
+```
+
+When an extension is queued, its source is atomically pinned in R2 before the job is created. A successful provider reference refreshes the provider-reference timestamp and pushes any scheduled relay deletion forward.
+
+The cleanup worker:
+
+- requires a verified local replica
+- skips active extension sources
+- rechecks eligibility under a row lock immediately before R2 deletion
+- records `relay_deleted_at` only after the delete request succeeds
 
 ## Persistent Agent
 
@@ -117,89 +250,138 @@ The right-side Agent is project-scoped and PostgreSQL-backed.
 Implemented Agent capabilities:
 
 - Persistent thread/message history
-- Uses the selected Google profile
+- Selected Google profile execution
 - Read project
-- List scenes
-- List assets
+- List scenes/assets
 - Create scene
 - Save prompt revision
 - Bounded tool loop
+- Reuse persisted research
+- Run fresh Google Search / URL Context research
 
-The Agent cannot autonomously trigger paid Veo generation yet. Paid generation remains behind explicit user action until an approval/cost policy is added.
+Paid Veo generation is intentionally **not** an autonomous Agent tool. Expensive generation remains behind explicit user actions.
+
+## Persistent research
+
+Google Search and URL Context findings can be saved as project research sessions and sources.
+
+Stored context includes:
+
+- query
+- summary
+- search queries
+- source URLs/titles
+- citation positions/metadata
+- selected API profile
+
+Web content is treated as untrusted evidence and cannot authorize credential changes, budget changes, deletion, permission changes, or paid generations.
 
 ## Desktop companion
 
-The first companion runs as a Node process and can later be wrapped in Tauri/Windows packaging.
+The first companion is a Node process and can later be wrapped as a Tauri/Windows application.
 
 It:
 
 1. Registers or heartbeats the device.
-2. Reports media root and current free disk.
-3. Receives only R2 outputs targeted to its device ID.
-4. Uses short-lived presigned R2 URLs.
-5. Streams each file to a `.part` file.
-6. Verifies SHA-256 against PostgreSQL metadata.
-7. Atomically renames the verified file into the media folder.
-8. Reports its verified relative path and hash.
-9. Advances the corresponding generation from `CLOUD_READY` to `LOCAL_CONFIRMED`.
+2. Reports media root and free disk.
+3. Receives only outputs targeted to its device ID.
+4. Gets short-lived presigned R2 URLs rather than R2 credentials.
+5. Streams to a `.part` file.
+6. Computes SHA-256.
+7. Verifies the hash against server metadata.
+8. Atomically renames the verified file.
+9. Reports the verified local replica.
+10. Advances the targeted generation to `LOCAL_CONFIRMED` after server-side hash verification.
 
-The device ID is persisted under the media root so restarting the companion does not create a new device record.
-
-### Companion configuration
-
-Set these values for the companion process:
+Companion configuration:
 
 ```text
 COMPANION_APP_URL=http://localhost:3000
-COMPANION_TOKEN=<same secret as server>
+COMPANION_TOKEN=<same server secret>
 COMPANION_DEVICE_NAME=Home PC
 COMPANION_MEDIA_ROOT=D:\AI Video Studio
 ```
 
-Then run:
+Run:
 
 ```bash
 npm run companion
 ```
 
-`COMPANION_DEVICE_ID` is optional; normally the companion stores its assigned ID itself.
+## Setup and health UI
+
+Useful routes:
+
+```text
+/             Workspace
+/extensions   Veo extension manager
+/setup        Infrastructure health + non-billable preflight
+/profiles     Google profile manager
+```
+
+Deep health endpoint:
+
+```text
+GET /api/system/health?deep=1
+```
+
+It verifies connectivity plus required database tables/columns without exposing secrets.
+
+## Local non-billable verification
+
+CI and local development can validate persistence without Google/R2/Inngest credentials.
+
+With local Postgres and the dev server running:
+
+```bash
+npm run smoke:local
+```
+
+The smoke path is production-disabled and tests temporary data for:
+
+- workspace/project/scene persistence
+- prompt versions
+- generation idempotency
+- extension-source pinning
+- parent/child extension lineage
+- +7 second duration math
+- 20-extension hard stop
+
+No provider call occurs.
+
+## CI
+
+Every push to `main` currently runs:
+
+1. PostgreSQL 16 service
+2. schema bootstrap
+3. schema verification
+4. Veo/retry regression tests
+5. TypeScript typecheck
+6. local Next.js persistence/extension smoke test
+7. production Next.js build
 
 ## Security boundaries
 
 - Google credentials are server-only.
-- User-managed Google keys are encrypted before database storage.
+- User-managed Google credentials are encrypted before database storage.
 - Credentials never enter Agent prompts/tool results.
-- Companion write/pending endpoints require `COMPANION_TOKEN`.
+- Companion endpoints require `COMPANION_TOKEN`.
 - R2 companion downloads use short-lived signed URLs.
-- The server independently checks the companion-reported SHA-256 before accepting `verified` media state.
-- Automatic quota/account rotation is intentionally not implemented.
+- Server independently verifies companion SHA-256 reports.
+- Paid provider submission has no automatic retry.
+- Automatic account rotation/quota farming is intentionally not implemented.
 
-## Database bootstrap
+## Deployment
 
-```bash
-npm install
-npm run db:bootstrap
-```
+See [`DEPLOYMENT.md`](./DEPLOYMENT.md).
 
-## Local development
+Still required before the first live paid end-to-end test:
 
-```bash
-npm run dev
-```
-
-Then open `http://localhost:3000`.
-
-## Verification
-
-GitHub Actions runs dependency installation, TypeScript typecheck, and a production Next.js build on pushes to `main`.
-
-## Remaining major work
-
-- Complete profile disable/re-enable UI
-- Improve Agent tool-result rendering
-- Add monetary cost/spend accounting in addition to generation-count limits
-- Configure R2 lifecycle rules in deployed infrastructure
-- Package companion as a Windows/Tauri app and optionally auto-start it
-- Add Google Search + URL Context research persistence
-- Configure real PostgreSQL, Inngest, R2, Google credentials, and deployment secrets
-- Run the first controlled end-to-end paid Veo test
+- choose/configure a production PostgreSQL provider
+- configure Cloudflare R2
+- configure Inngest
+- configure at least one authorized Google profile
+- link/deploy the repository to a Next.js host such as Vercel
+- run deep health + preflight
+- perform one controlled paid Veo generation and verify cloud → R2 → local delivery
