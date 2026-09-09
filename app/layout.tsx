@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import UtilityNav from "./utility-nav";
 import "./globals.css";
 import "./utility-nav.css";
 import "./veo-controls.css";
@@ -13,12 +14,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     <html lang="en">
       <body>
         {children}
-        <nav className="utility-nav" aria-label="Studio utility navigation">
-          <a href="/">Workspace</a>
-          <a href="/extensions">Extensions</a>
-          <a href="/setup">Setup</a>
-          <a href="/profiles">Profiles</a>
-        </nav>
+        <UtilityNav />
       </body>
     </html>
   );
