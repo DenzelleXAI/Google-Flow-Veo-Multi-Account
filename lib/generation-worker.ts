@@ -11,6 +11,7 @@ import {
   updateAttempt,
   updateGenerationStatus,
 } from "./generations";
+import { requireDb } from "./db";
 import { resolveGoogleProfile } from "./provider-profiles";
 import { createVeoClient, downloadVeoVideo, pollVeoOperation, submitVeoGeneration } from "./providers/veo";
 import { downloadRelayObject, uploadVideoToRelay } from "./r2";
@@ -69,12 +70,23 @@ async function loadVeoInputs(job: any) {
   };
 }
 
+async function refreshExtensionReferenceBestEffort(jobId: string) {
+  try {
+    await markExtensionSourceReferenced(jobId);
+  } catch (error) {
+    console.error("Failed to refresh extension source reference window", { jobId, error });
+  }
+}
+
 export const submitVeoGenerationJob = inngest.createFunction(
   {
     id: "submit-veo-generation",
     name: "Submit Veo generation",
     triggers: { event: "video/generation.submit" },
-    retries: 4,
+    // Never automatically retry the function that contains the paid provider
+    // submission. If the provider accepts the request but our response is lost,
+    // an automatic retry could create a second billable generation.
+    retries: 0,
   },
   async ({ event, step }) => {
     const jobId = String(event.data.jobId);
@@ -115,14 +127,13 @@ export const submitVeoGenerationJob = inngest.createFunction(
         const name = submitted.operation?.name;
         if (!name) throw new Error("Veo accepted the request but returned no operation name.");
 
+        // The paid submission step is not considered successful until the
+        // provider operation ID is durably persisted in our own database.
         await updateAttempt({
           attemptId: attempt.id,
           status: "provider_pending",
           providerOperationId: name,
         });
-        if (job.generation_mode === "extend") {
-          await markExtensionSourceReferenced(jobId);
-        }
         await updateGenerationStatus(jobId, "provider_pending");
         return name;
       });
@@ -134,12 +145,20 @@ export const submitVeoGenerationJob = inngest.createFunction(
         errorCode: "AMBIGUOUS_SUBMISSION",
         errorMessage: message,
         completed: true,
-      });
-      await updateGenerationStatus(jobId, "failed_ambiguous");
+      }).catch((markError) => console.error("Failed to persist ambiguous attempt state", markError));
+      await updateGenerationStatus(jobId, "failed_ambiguous")
+        .catch((markError) => console.error("Failed to persist ambiguous job state", markError));
       throw new NonRetriableError(`Veo submission outcome is ambiguous: ${message}`);
     }
 
+    // This bookkeeping is outside the paid/ambiguous boundary. Failure here
+    // must never make a known provider operation look ambiguous.
+    if (job.generation_mode === "extend") {
+      await refreshExtensionReferenceBestEffort(jobId);
+    }
+
     await step.sendEvent("dispatch-monitor", {
+      id: `video-monitor-${attempt.id}`,
       name: "video/generation.monitor",
       data: {
         jobId,
@@ -153,11 +172,64 @@ export const submitVeoGenerationJob = inngest.createFunction(
   },
 );
 
+export const recoverPendingVeoMonitors = inngest.createFunction(
+  {
+    id: "recover-pending-veo-monitors",
+    name: "Recover pending Veo monitors",
+    triggers: { cron: "* * * * *" },
+    retries: 3,
+  },
+  async ({ step }) => {
+    const candidates = await step.run("load-provider-pending-attempts", async () => {
+      const sql = requireDb();
+      const rows = await sql`
+        select
+          j.id as job_id,
+          a.id as attempt_id,
+          a.api_profile_id,
+          a.provider_operation_id
+        from generation_jobs j
+        join generation_attempts a on a.generation_job_id = j.id
+        where j.status = 'provider_pending'
+          and a.status = 'provider_pending'
+          and a.provider_operation_id is not null
+          and a.started_at <= now() - interval '30 seconds'
+        order by a.started_at asc
+        limit 100
+      `;
+      return Array.from(rows) as Array<{
+        job_id: string;
+        attempt_id: string;
+        api_profile_id: string;
+        provider_operation_id: string;
+      }>;
+    });
+
+    for (const candidate of candidates) {
+      await step.sendEvent(`recover-monitor-${candidate.attempt_id}`, {
+        // Inngest event IDs deduplicate delivery for 24 hours. This makes the
+        // immediate dispatch and recovery cron safe to overlap.
+        id: `video-monitor-${candidate.attempt_id}`,
+        name: "video/generation.monitor",
+        data: {
+          jobId: candidate.job_id,
+          attemptId: candidate.attempt_id,
+          apiProfileId: candidate.api_profile_id,
+          operationName: candidate.provider_operation_id,
+        },
+      });
+    }
+
+    return { recovered: candidates.length };
+  },
+);
+
 export const monitorVeoGeneration = inngest.createFunction(
   {
     id: "monitor-veo-generation",
     name: "Monitor and relay Veo generation",
     triggers: { event: "video/generation.monitor" },
+    idempotency: "event.data.attemptId",
     retries: 4,
   },
   async ({ event, step }) => {
@@ -174,6 +246,13 @@ export const monitorVeoGeneration = inngest.createFunction(
 
     if (["cloud_ready", "local_confirmed", "cancelled"].includes(job.status)) {
       return { jobId, status: job.status, skipped: true };
+    }
+
+    if (job.generation_mode === "extend") {
+      await step.run("reconcile-extension-reference-window", async () => {
+        await refreshExtensionReferenceBestEffort(jobId);
+        return true;
+      });
     }
 
     const resolved = await resolveGoogleProfile(apiProfileId);
