@@ -1,6 +1,23 @@
 import { NextResponse } from "next/server";
+import { listWorkspaceAssets } from "@/lib/asset-library";
 import { dbConfigured } from "@/lib/db";
 import { createAsset } from "@/lib/devices";
+
+export async function GET(request: Request) {
+  if (!dbConfigured) {
+    return NextResponse.json({ error: "DATABASE_URL is not configured" }, { status: 503 });
+  }
+
+  try {
+    const { searchParams } = new URL(request.url);
+    const projectId = searchParams.get("projectId");
+    const assets = await listWorkspaceAssets(projectId);
+    return NextResponse.json({ assets });
+  } catch (error) {
+    console.error(error);
+    return NextResponse.json({ error: "Failed to load assets" }, { status: 500 });
+  }
+}
 
 export async function POST(request: Request) {
   if (!dbConfigured) {
