@@ -26,7 +26,17 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          node --build-sea .\companion\index.mjs --output .\dist\PersistentAIVideoStudioCompanion.exe
+          $sea = @{
+            main = "companion/index.mjs"
+            mainFormat = "module"
+            output = "dist/PersistentAIVideoStudioCompanion.exe"
+            disableExperimentalSEAWarning = $true
+            useSnapshot = $false
+            useCodeCache = $false
+            execArgvExtension = "none"
+          } | ConvertTo-Json
+          Set-Content -Path sea-config.json -Value $sea -Encoding UTF8
+          node --build-sea sea-config.json
 
       - name: Verify executable
         shell: pwsh
