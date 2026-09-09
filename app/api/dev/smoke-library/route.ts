@@ -5,6 +5,7 @@ import { requireDb } from "@/lib/db";
 import { upsertAssetLocation } from "@/lib/devices";
 import { getGenerationMediaState } from "@/lib/generation-media";
 import { createGenerationJob } from "@/lib/generations";
+import { createProjectBackup } from "@/lib/project-backup";
 import { ensurePersonalWorkspace } from "@/lib/workspace";
 
 export const runtime = "nodejs";
@@ -107,6 +108,31 @@ export async function POST() {
       throw new Error("Verified target replica did not schedule the expected R2 cleanup grace window.");
     }
 
+    const backup = await createProjectBackup(projectId);
+    if (!backup) throw new Error("Project backup exporter did not return the project.");
+    if (backup.security.credentialsIncluded !== false) {
+      throw new Error("Project backup did not explicitly mark credentials as excluded.");
+    }
+    if (backup.assets.length !== 1 || backup.generationJobs.length !== 1 || backup.generationOutputs.length !== 1) {
+      throw new Error("Project backup did not include the expected persistent generation metadata.");
+    }
+
+    const serializedBackup = JSON.stringify(backup);
+    const forbiddenBackupFields = [
+      "encrypted_credential",
+      "APP_ACCESS_PASSWORD",
+      "APP_SESSION_SECRET",
+      "DATABASE_URL",
+      "R2_SECRET_ACCESS_KEY",
+      "INNGEST_SIGNING_KEY",
+      "COMPANION_TOKEN",
+    ];
+    for (const field of forbiddenBackupFields) {
+      if (serializedBackup.includes(field)) {
+        throw new Error(`Project backup unexpectedly contains forbidden credential field marker: ${field}`);
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       checks: {
@@ -115,6 +141,8 @@ export async function POST() {
         generationMediaLocality: true,
         targetReplicaConfirmation: true,
         relayCleanupScheduled: true,
+        projectBackupExport: true,
+        backupCredentialsExcluded: true,
         providerCalled: false,
       },
       temporary: { projectId, deviceId, jobId, assetId },
