@@ -9,6 +9,11 @@
     "test": "node --experimental-strip-types --test tests/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "db:bootstrap": "node scripts/db-bootstrap.mjs",
+    "db:check": "node scripts/db-check.mjs",
+    "db:local:up": "docker compose up -d postgres",
+    "db:local:down": "docker compose down",
+    "db:local:reset": "docker compose down -v && docker compose up -d postgres",
+    "db:local:bootstrap": "node scripts/db-local-bootstrap.mjs",
     "companion": "node companion/index.mjs"
   },
   "dependencies": {
