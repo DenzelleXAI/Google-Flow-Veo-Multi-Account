@@ -52,9 +52,25 @@ jobs:
         shell: pwsh
         run: |
           Copy-Item companion\windows\install-standalone.ps1 dist\install.ps1
-          Copy-Item companion\windows\run-standalone.ps1 dist\run.ps1
-          Copy-Item companion\windows\uninstall-standalone.ps1 dist\uninstall.ps1
+          Copy-Item companion\windows\run-standalone.ps1 dist\run-standalone.ps1
+          Copy-Item companion\windows\uninstall-standalone.ps1 dist\uninstall-standalone.ps1
           Copy-Item companion\windows\README-STANDALONE.md dist\README.txt
+
+      - name: Validate package layout
+        shell: pwsh
+        run: |
+          $required = @(
+            ".\dist\PersistentAIVideoStudioCompanion.exe",
+            ".\dist\install.ps1",
+            ".\dist\run-standalone.ps1",
+            ".\dist\uninstall-standalone.ps1",
+            ".\dist\README.txt"
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path $file)) {
+              throw "Standalone companion package is missing $file"
+            }
+          }
 
       - name: Upload standalone companion artifact
         uses: actions/upload-artifact@v4
