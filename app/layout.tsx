@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import "./utility-nav.css";
+import "./veo-controls.css";
 
 export const metadata: Metadata = {
   title: "Persistent AI Video Studio",
