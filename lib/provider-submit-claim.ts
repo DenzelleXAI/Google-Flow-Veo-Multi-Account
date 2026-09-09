@@ -86,7 +86,7 @@ export async function failClosedStaleProviderSubmissions(
       where a.status = 'provider_submit_claimed'
         and a.provider_operation_id is null
         and j.status = 'submitting'
-        and a.started_at <= now() - make_interval(secs => ${safeAge})
+        and a.started_at <= now() - (${safeAge} * interval '1 second')
       order by a.started_at asc
       limit ${safeLimit}
       for update of a, j skip locked
