@@ -172,7 +172,7 @@ export async function upsertAssetLocation(input: {
     `;
 
     if (input.status === "verified") {
-      await tx`
+      const confirmedJobs = await tx`
         update generation_jobs j
         set status = 'local_confirmed', updated_at = now()
         from generation_outputs go
@@ -181,9 +181,10 @@ export async function upsertAssetLocation(input: {
           and j.target_device_id = ${input.deviceId}
           and j.workspace_id = ${workspace.id}
           and j.status = 'cloud_ready'
+        returning j.id
       `;
 
-      if (asset.type === "GENERATED_VIDEO" && asset.r2_key) {
+      if (confirmedJobs.length > 0 && asset.type === "GENERATED_VIDEO" && asset.r2_key) {
         await tx`
           update assets
           set relay_delete_after = coalesce(relay_delete_after, now() + interval '24 hours')
