@@ -7,6 +7,10 @@ import {
   updateGenerationStatus,
   type GenerationAssetInput,
 } from "@/lib/generations";
+import {
+  assertGenerationInfrastructureReady,
+  GenerationInfrastructureError,
+} from "@/lib/generation-infrastructure";
 import { inngest } from "@/lib/inngest";
 import { validateVeoSettings } from "@/lib/model-registry";
 
@@ -86,11 +90,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Veo 3.1 Lite does not support reference images" }, { status: 400 });
     }
 
+    const requestedApiProfileId = typeof body.requestedApiProfileId === "string" ? body.requestedApiProfileId : null;
+    await assertGenerationInfrastructureReady(requestedApiProfileId);
+
     const result = await createGenerationJob({
       generationRequestId: body.generationRequestId,
       projectId: body.projectId,
       sceneId: typeof body.sceneId === "string" ? body.sceneId : null,
-      requestedApiProfileId: typeof body.requestedApiProfileId === "string" ? body.requestedApiProfileId : null,
+      requestedApiProfileId,
       targetDeviceId: typeof body.targetDeviceId === "string" ? body.targetDeviceId : null,
       modelId: body.modelId,
       promptSnapshot: body.promptSnapshot,
@@ -118,6 +125,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json(result, { status: result.created ? 201 : 200 });
   } catch (error) {
+    if (error instanceof GenerationInfrastructureError) {
+      return NextResponse.json({ error: error.message, code: error.code }, { status: 503 });
+    }
     if (error instanceof GenerationSafetyError) {
       const status = error.code === "DAILY_LIMIT" || error.code === "MONTHLY_LIMIT" ? 429 : 409;
       return NextResponse.json({ error: error.message, code: error.code }, { status });
