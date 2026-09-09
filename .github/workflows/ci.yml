@@ -52,7 +52,10 @@ jobs:
           $files = @(
             "companion/windows/install.ps1",
             "companion/windows/run.ps1",
-            "companion/windows/uninstall.ps1"
+            "companion/windows/uninstall.ps1",
+            "companion/windows/install-standalone.ps1",
+            "companion/windows/run-standalone.ps1",
+            "companion/windows/uninstall-standalone.ps1"
           )
           foreach ($file in $files) {
             $tokens = $null
