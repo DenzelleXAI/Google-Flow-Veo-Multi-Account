@@ -81,6 +81,7 @@ export default function GenerationMediaPanel({ jobId }: { jobId: string }) {
 
   async function openRelayCopy(assetId: string) {
     if (openingAssetId) return;
+    const popup = window.open("about:blank", "_blank", "noopener,noreferrer");
     setOpeningAssetId(assetId);
     setError("");
     try {
@@ -88,8 +89,10 @@ export default function GenerationMediaPanel({ jobId }: { jobId: string }) {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error ?? "Relay copy is unavailable");
       if (typeof data.downloadUrl !== "string") throw new Error("No relay download URL was returned");
-      window.open(data.downloadUrl, "_blank", "noopener,noreferrer");
+      if (popup) popup.location.href = data.downloadUrl;
+      else window.location.href = data.downloadUrl;
     } catch (cause) {
+      popup?.close();
       setError(cause instanceof Error ? cause.message : "Failed to open relay copy");
     } finally {
       setOpeningAssetId(null);
