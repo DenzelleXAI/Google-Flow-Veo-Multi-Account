@@ -16,6 +16,10 @@ export type ProviderSubmissionClaim = {
  * before the provider operation ID is persisted, a replay cannot claim the
  * same attempt again and therefore must not call Veo again.
  *
+ * The attempt start timestamp is refreshed at claim time so stale-claim
+ * detection measures the dangerous provider-call window, not earlier input
+ * loading or profile resolution work.
+ *
  * The tradeoff is deliberate: a crash after the claim but before the HTTP
  * request reaches Google can leave a false-positive ambiguous attempt. Human
  * review is safer than a possible duplicate billable generation.
@@ -26,7 +30,8 @@ export async function claimProviderSubmission(attemptId: string): Promise<Provid
   return sql.begin(async (tx) => {
     const claimed = await tx`
       update generation_attempts
-      set status = 'provider_submit_claimed'
+      set status = 'provider_submit_claimed',
+          started_at = now()
       where id = ${attemptId}
         and status = 'submitting'
         and provider_operation_id is null
