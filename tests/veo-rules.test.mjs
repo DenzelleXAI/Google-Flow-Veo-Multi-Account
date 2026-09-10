@@ -177,6 +177,35 @@ test("reference images require 8 seconds", () => {
   );
 });
 
+test("reference images cannot be mixed with frame-animation inputs", () => {
+  for (const modelId of ["veo-3.1-generate-preview", "veo-3.1-fast-generate-preview"]) {
+    assert.match(
+      validateVeoSettings({
+        modelId,
+        resolution: "720p",
+        durationSeconds: 8,
+        aspectRatio: "9:16",
+        hasInitialFrame: true,
+        referenceImageCount: 1,
+      }) ?? "",
+      /cannot be combined with initial-frame or last-frame inputs/i,
+    );
+
+    assert.match(
+      validateVeoSettings({
+        modelId,
+        resolution: "720p",
+        durationSeconds: 8,
+        aspectRatio: "9:16",
+        hasInitialFrame: true,
+        hasLastFrame: true,
+        referenceImageCount: 1,
+      }) ?? "",
+      /cannot be combined with initial-frame or last-frame inputs/i,
+    );
+  }
+});
+
 test("Standard and Fast support 720p 8-second extension requests", () => {
   for (const modelId of ["veo-3.1-generate-preview", "veo-3.1-fast-generate-preview"]) {
     assert.equal(
@@ -221,7 +250,7 @@ test("extension requires 720p and 8-second API duration", () => {
       modelId: "veo-3.1-fast-generate-preview",
       resolution: "720p",
       durationSeconds: 6,
-      aspectRatio: "9:16",
+      aspectRatio: "16:9",
       isExtension: true,
     }) ?? "",
     /requires an 8-second api duration/i,
@@ -234,7 +263,7 @@ test("extension cannot combine image inputs", () => {
       modelId: "veo-3.1-generate-preview",
       resolution: "720p",
       durationSeconds: 8,
-      aspectRatio: "9:16",
+      aspectRatio: "16:9",
       isExtension: true,
       hasInitialFrame: true,
     }) ?? "",
