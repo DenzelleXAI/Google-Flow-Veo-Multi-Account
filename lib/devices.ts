@@ -77,39 +77,53 @@ export async function createAsset(input: {
   durationSeconds?: number | null;
 }) {
   const sql = requireDb();
+  const workspace = await ensurePersonalWorkspace();
 
   const rows = await sql`
     insert into assets (
       project_id, type, filename, mime_type, relative_path, r2_key, sha256,
       file_size_bytes, width, height, duration_seconds
-    ) values (
-      ${input.projectId}, ${input.type}, ${input.filename}, ${input.mimeType ?? null},
+    )
+    select
+      p.id, ${input.type}, ${input.filename}, ${input.mimeType ?? null},
       ${input.relativePath ?? null}, ${input.r2Key ?? null}, ${input.sha256 ?? null},
       ${input.fileSizeBytes ?? null}, ${input.width ?? null}, ${input.height ?? null},
       ${input.durationSeconds ?? null}
-    )
+    from projects p
+    where p.id = ${input.projectId}
+      and p.workspace_id = ${workspace.id}
     returning *
   `;
 
+  if (!rows[0]) throw new Error("Project does not belong to this workspace.");
   return rows[0];
 }
 
 export async function listProjectAssets(projectId: string) {
   const sql = requireDb();
+  const workspace = await ensurePersonalWorkspace();
   return sql`
-    select id, project_id, type, filename, mime_type, relative_path, r2_key,
-      relay_delete_after, relay_deleted_at, veo_reference_refreshed_at,
-      sha256, file_size_bytes, width, height, duration_seconds, created_at
-    from assets
-    where project_id = ${projectId}
-    order by created_at desc
+    select a.id, a.project_id, a.type, a.filename, a.mime_type, a.relative_path, a.r2_key,
+      a.relay_delete_after, a.relay_deleted_at, a.veo_reference_refreshed_at,
+      a.sha256, a.file_size_bytes, a.width, a.height, a.duration_seconds, a.created_at
+    from assets a
+    join projects p on p.id = a.project_id
+    where a.project_id = ${projectId}
+      and p.workspace_id = ${workspace.id}
+    order by a.created_at desc
   `;
 }
 
 export async function getAsset(assetId: string) {
   const sql = requireDb();
+  const workspace = await ensurePersonalWorkspace();
   const rows = await sql`
-    select * from assets where id = ${assetId} limit 1
+    select a.*
+    from assets a
+    join projects p on p.id = a.project_id
+    where a.id = ${assetId}
+      and p.workspace_id = ${workspace.id}
+    limit 1
   `;
   return rows[0] ?? null;
 }
