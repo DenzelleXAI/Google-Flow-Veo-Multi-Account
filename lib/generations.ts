@@ -34,6 +34,8 @@ export class GenerationSafetyError extends Error {
       | "LOW_DISK"
       | "INVALID_DEVICE"
       | "INVALID_PROJECT"
+      | "INVALID_SCENE"
+      | "INVALID_INPUT_ASSET"
       | "INVALID_PARENT"
       | "EXTENSION_LIMIT"
       | "INVALID_EXTENSION_SOURCE",
@@ -254,6 +256,53 @@ export async function createGenerationJob(input: {
       }];
     }
 
+    if (sceneId) {
+      const scenes = await tx`
+        select id
+        from scenes
+        where id = ${sceneId} and project_id = ${input.projectId}
+        limit 1
+      `;
+      if (!scenes[0]) {
+        throw new GenerationSafetyError("INVALID_SCENE", "Selected scene does not belong to this project.");
+      }
+    }
+
+    const inputSlots = new Set<string>();
+    for (const item of effectiveAssetInputs) {
+      const sortOrder = item.sortOrder ?? 0;
+      const slot = `${item.role}:${sortOrder}`;
+      if (inputSlots.has(slot)) {
+        throw new GenerationSafetyError("INVALID_INPUT_ASSET", `Duplicate generation input slot ${slot}.`);
+      }
+      inputSlots.add(slot);
+
+      const assets = await tx`
+        select a.id, a.type, a.mime_type, a.r2_key, a.relay_deleted_at
+        from assets a
+        join projects p on p.id = a.project_id
+        where a.id = ${item.assetId}
+          and a.project_id = ${input.projectId}
+          and p.workspace_id = ${workspace.id}
+        limit 1
+      `;
+      const asset = assets[0];
+      if (!asset) {
+        throw new GenerationSafetyError("INVALID_INPUT_ASSET", `Asset ${item.assetId} does not belong to this project/workspace.`);
+      }
+      if (!asset.r2_key || asset.relay_deleted_at) {
+        throw new GenerationSafetyError("INVALID_INPUT_ASSET", `Asset ${item.assetId} is not currently available in the R2 relay.`);
+      }
+
+      if (item.role === "extension_source") {
+        if (asset.type !== "GENERATED_VIDEO" || !String(asset.mime_type ?? "").startsWith("video/")) {
+          throw new GenerationSafetyError("INVALID_EXTENSION_SOURCE", "Extension source must be an app-recorded generated video.");
+        }
+      } else if (!String(asset.mime_type ?? "").startsWith("image/")) {
+        throw new GenerationSafetyError("INVALID_INPUT_ASSET", `Asset ${item.assetId} is not a supported image input.`);
+      }
+    }
+
     await tx`
       insert into workspace_settings (workspace_id)
       values (${workspace.id})
@@ -269,6 +318,21 @@ export async function createGenerationJob(input: {
       for update
     `;
     const settings = settingsRows[0];
+
+    // A concurrent duplicate request may have passed the optimistic lookup
+    // before this transaction acquired the workspace-settings lock. Re-check
+    // under that serialization point so idempotent retries do not consume
+    // budget or hit the unique constraint.
+    const existingAfterLock = await tx`
+      select *
+      from generation_jobs
+      where workspace_id = ${workspace.id}
+        and generation_request_id = ${input.generationRequestId}
+      limit 1
+    `;
+    if (existingAfterLock[0]) {
+      return { job: existingAfterLock[0] as unknown as GenerationJobRecord, created: false };
+    }
 
     // Extension reserves an 8-second 720p request. Google currently adds 7 seconds
     // to the source video, so this intentionally reserves spend conservatively.
@@ -380,22 +444,31 @@ export async function createGenerationJob(input: {
         ${input.modelId}, ${input.promptSnapshot}, ${aspectRatio},
         ${durationSeconds}, ${resolution}, ${pricing.estimatedCostUsd}, ${pricing.pricingVersion}, 'queued'
       )
+      on conflict (workspace_id, generation_request_id) do nothing
       returning *
     `;
+
+    if (!rows[0]) {
+      const raced = await tx`
+        select *
+        from generation_jobs
+        where workspace_id = ${workspace.id}
+          and generation_request_id = ${input.generationRequestId}
+        limit 1
+      `;
+      if (raced[0]) {
+        return { job: raced[0] as unknown as GenerationJobRecord, created: false };
+      }
+      throw new Error("Generation job insert lost an idempotency race without an existing row.");
+    }
 
     const job = rows[0] as unknown as GenerationJobRecord;
 
     for (const item of effectiveAssetInputs) {
-      const inserted = await tx`
+      await tx`
         insert into generation_job_assets (generation_job_id, asset_id, role, sort_order)
-        select ${job.id}, a.id, ${item.role}, ${item.sortOrder ?? 0}
-        from assets a
-        where a.id = ${item.assetId} and a.project_id = ${input.projectId}
-        returning id
+        values (${job.id}, ${item.assetId}, ${item.role}, ${item.sortOrder ?? 0})
       `;
-      if (!inserted[0]) {
-        throw new GenerationSafetyError("INVALID_EXTENSION_SOURCE", `Asset ${item.assetId} does not belong to this project.`);
-      }
     }
 
     return { job, created: true };
