@@ -6,6 +6,7 @@ import {
   ownerAuthRequiredAtRuntime,
   verifyOwnerSessionToken,
 } from "./lib/owner-auth";
+import { isTrustedBrowserMutation } from "./lib/owner-request-security";
 
 function isPublicHumanPath(pathname: string) {
   return pathname === "/login" || pathname === "/api/auth/login";
@@ -31,6 +32,16 @@ function hasValidCompanionToken(request: NextRequest) {
 
 function unauthorizedApi(message: string, status = 401) {
   return NextResponse.json({ error: message }, { status });
+}
+
+function ownerMutationAllowed(request: NextRequest) {
+  return isTrustedBrowserMutation({
+    method: request.method,
+    requestOrigin: request.nextUrl.origin,
+    originHeader: request.headers.get("origin"),
+    secFetchSite: request.headers.get("sec-fetch-site"),
+    production: process.env.NODE_ENV === "production",
+  });
 }
 
 export async function proxy(request: NextRequest) {
@@ -61,6 +72,9 @@ export async function proxy(request: NextRequest) {
 
   const session = request.cookies.get(OWNER_SESSION_COOKIE)?.value;
   if (await verifyOwnerSessionToken(session)) {
+    if (pathname.startsWith("/api/") && !ownerMutationAllowed(request)) {
+      return unauthorizedApi("Cross-origin state-changing requests are not allowed.", 403);
+    }
     return NextResponse.next();
   }
 
