@@ -1,6 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { requireDb } from "./db";
 import { resolveGoogleProfile } from "./provider-profiles";
+import { ensurePersonalWorkspace } from "./workspace";
 
 export type ResearchSource = {
   url: string;
@@ -48,6 +49,19 @@ function extractResearch(interaction: any) {
   return { summary, sources: uniqueSources, queries: Array.from(new Set(queries)) };
 }
 
+async function requireWorkspaceProject(projectId: string) {
+  const sql = requireDb();
+  const workspace = await ensurePersonalWorkspace();
+  const projects = await sql`
+    select id
+    from projects
+    where id = ${projectId} and workspace_id = ${workspace.id}
+    limit 1
+  `;
+  if (!projects[0]) throw new Error("Project not found in current workspace.");
+  return workspace;
+}
+
 export async function runProjectResearch(input: {
   projectId: string;
   apiProfileId?: string | null;
@@ -55,10 +69,7 @@ export async function runProjectResearch(input: {
   urls?: string[];
 }) {
   const sql = requireDb();
-  const projects = await sql`
-    select id from projects where id = ${input.projectId} limit 1
-  `;
-  if (!projects[0]) throw new Error("Project not found.");
+  const workspace = await requireWorkspaceProject(input.projectId);
 
   const urls = (input.urls ?? [])
     .filter((url) => typeof url === "string" && /^https?:\/\//i.test(url))
@@ -88,6 +99,16 @@ export async function runProjectResearch(input: {
   const mode = urls.length ? "search+url_context" : "search";
 
   const session = await sql.begin(async (tx) => {
+    // Re-check workspace ownership inside the write transaction so a project
+    // cannot be moved/deleted between the preflight read and persistence.
+    const project = await tx`
+      select id
+      from projects
+      where id = ${input.projectId} and workspace_id = ${workspace.id}
+      limit 1
+    `;
+    if (!project[0]) throw new Error("Project not found in current workspace.");
+
     const sessions = await tx`
       insert into research_sessions (
         project_id, api_profile_id, query, mode, summary, search_queries
@@ -122,21 +143,27 @@ export async function runProjectResearch(input: {
 
 export async function listProjectResearch(projectId: string, limit = 10) {
   const sql = requireDb();
+  const workspace = await requireWorkspaceProject(projectId);
   const sessions = await sql`
-    select id, project_id, api_profile_id, query, mode, summary, search_queries, created_at
-    from research_sessions
-    where project_id = ${projectId}
-    order by created_at desc
+    select rs.id, rs.project_id, rs.api_profile_id, rs.query, rs.mode, rs.summary, rs.search_queries, rs.created_at
+    from research_sessions rs
+    join projects p on p.id = rs.project_id
+    where rs.project_id = ${projectId}
+      and p.workspace_id = ${workspace.id}
+    order by rs.created_at desc
     limit ${Math.max(1, Math.min(limit, 50))}
   `;
 
   const result = [];
   for (const session of sessions) {
     const sources = await sql`
-      select url, title, citation_start, citation_end, retrieved_at
-      from research_sources
-      where research_session_id = ${session.id}
-      order by retrieved_at asc
+      select src.url, src.title, src.citation_start, src.citation_end, src.retrieved_at
+      from research_sources src
+      join research_sessions rs on rs.id = src.research_session_id
+      join projects p on p.id = rs.project_id
+      where src.research_session_id = ${session.id}
+        and p.workspace_id = ${workspace.id}
+      order by src.retrieved_at asc
     `;
     result.push({ ...session, sources: Array.from(sources) });
   }
