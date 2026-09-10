@@ -4,17 +4,18 @@ import { z } from "zod";
 import { requireDb } from "./db";
 import { resolveGoogleProfile } from "./provider-profiles";
 import { listProjectResearch, runProjectResearch } from "./research";
-import { createScene, savePromptVersion } from "./workspace";
+import { createScene, ensurePersonalWorkspace, savePromptVersion } from "./workspace";
 
 async function getProjectContext(projectId: string) {
   const sql = requireDb();
+  const workspace = await ensurePersonalWorkspace();
   const projectRows = await sql`
     select id, name, description
     from projects
-    where id = ${projectId}
+    where id = ${projectId} and workspace_id = ${workspace.id}
     limit 1
   `;
-  if (!projectRows[0]) throw new Error("Project not found.");
+  if (!projectRows[0]) throw new Error("Project not found in current workspace.");
 
   const sceneRows = await sql`
     select s.id, s.title, s.description, s.aspect_ratio, s.duration_seconds, s.resolution,
@@ -32,18 +33,20 @@ async function getProjectContext(projectId: string) {
   `;
 
   const assetRows = await sql`
-    select id, type, filename, mime_type, width, height, duration_seconds, sha256
-    from assets
-    where project_id = ${projectId}
-    order by created_at desc
+    select a.id, a.type, a.filename, a.mime_type, a.width, a.height, a.duration_seconds, a.sha256
+    from assets a
+    join projects p on p.id = a.project_id
+    where a.project_id = ${projectId} and p.workspace_id = ${workspace.id}
+    order by a.created_at desc
     limit 100
   `;
 
   const researchRows = await sql`
-    select id, query, mode, summary, created_at
-    from research_sessions
-    where project_id = ${projectId}
-    order by created_at desc
+    select rs.id, rs.query, rs.mode, rs.summary, rs.created_at
+    from research_sessions rs
+    join projects p on p.id = rs.project_id
+    where rs.project_id = ${projectId} and p.workspace_id = ${workspace.id}
+    order by rs.created_at desc
     limit 5
   `;
 
@@ -64,6 +67,7 @@ export async function runProjectAgent(input: {
   const google = createGoogleGenerativeAI({ apiKey: resolved.apiKey });
   const context = await getProjectContext(input.projectId);
   const sql = requireDb();
+  const workspace = await ensurePersonalWorkspace();
 
   const agent = new ToolLoopAgent({
     model: google("gemini-3.8-flash"),
@@ -132,7 +136,15 @@ export async function runProjectAgent(input: {
       createScene: tool({
         description: "Create a new scene in the current project.",
         inputSchema: z.object({ title: z.string().min(1).max(160) }),
-        execute: async ({ title }) => createScene(input.projectId, title),
+        execute: async ({ title }) => {
+          const project = await sql`
+            select id from projects
+            where id = ${input.projectId} and workspace_id = ${workspace.id}
+            limit 1
+          `;
+          if (!project[0]) throw new Error("Project not found in current workspace.");
+          return createScene(input.projectId, title);
+        },
       }),
       savePrompt: tool({
         description: "Save a new prompt revision for an existing scene in the current project.",
@@ -142,11 +154,15 @@ export async function runProjectAgent(input: {
         }),
         execute: async ({ sceneId, content }) => {
           const sceneRows = await sql`
-            select id from scenes
-            where id = ${sceneId} and project_id = ${input.projectId}
+            select s.id
+            from scenes s
+            join projects p on p.id = s.project_id
+            where s.id = ${sceneId}
+              and s.project_id = ${input.projectId}
+              and p.workspace_id = ${workspace.id}
             limit 1
           `;
-          if (!sceneRows[0]) throw new Error("Scene does not belong to this project.");
+          if (!sceneRows[0]) throw new Error("Scene does not belong to this project/workspace.");
           return savePromptVersion(sceneId, content, "agent");
         },
       }),
