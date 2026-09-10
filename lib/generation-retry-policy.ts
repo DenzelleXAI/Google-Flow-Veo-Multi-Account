@@ -3,6 +3,8 @@ export type RetryAttemptLike = {
   started_at: string | Date;
   provider_operation_id?: string | null;
   api_profile_id?: string | null;
+  status?: string | null;
+  error_code?: string | null;
 };
 
 export type RetryJobLike = {
@@ -19,6 +21,12 @@ export function latestGenerationAttempt(attempts: RetryAttemptLike[]) {
   return [...attempts].sort(
     (a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime(),
   )[0] ?? null;
+}
+
+function attemptIsAmbiguous(attempt: RetryAttemptLike | null) {
+  if (!attempt) return false;
+  if (attempt.status === "provider_submit_claimed" || attempt.status === "failed_ambiguous") return true;
+  return typeof attempt.error_code === "string" && attempt.error_code.startsWith("AMBIGUOUS_SUBMISSION");
 }
 
 export function decideGenerationRetry(job: RetryJobLike): GenerationRetryDecision {
@@ -42,6 +50,19 @@ export function decideGenerationRetry(job: RetryJobLike): GenerationRetryDecisio
   const latestAttempt = latestGenerationAttempt(job.attempts);
   if (latestAttempt?.provider_operation_id) {
     return { action: "resume_monitor", attempt: latestAttempt };
+  }
+
+  // Defense in depth: even if some unrelated bug or manual repair accidentally
+  // downgrades the job from FAILED_AMBIGUOUS to FAILED_RETRYABLE/QUEUED, a
+  // consumed provider-submit claim or ambiguity marker still blocks a second
+  // billable request for this logical job.
+  if (attemptIsAmbiguous(latestAttempt)) {
+    return {
+      action: "block",
+      code: "AMBIGUOUS_SUBMISSION_NO_RETRY",
+      reason:
+        "The latest attempt crossed the paid provider-submit boundary without a durable provider operation ID. Automatic resubmission is blocked.",
+    };
   }
 
   return { action: "resubmit_provider" };
