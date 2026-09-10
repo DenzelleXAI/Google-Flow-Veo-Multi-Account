@@ -6,7 +6,6 @@ const tracked = execFileSync("git", ["ls-files", "-z"], { encoding: "utf8" })
   .split("\0")
   .filter(Boolean);
 
-const allowedEnvFiles = new Set([".env.example"]);
 const violations = [];
 
 const credentialPatterns = [
@@ -18,13 +17,17 @@ const credentialPatterns = [
   ["Private key block", /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g],
 ];
 
+function isAllowedEnvTemplate(file) {
+  return file === ".env.example" || /^\.env(?:\.[A-Za-z0-9_-]+)*\.example$/.test(file);
+}
+
 function report(path, line, kind) {
   violations.push({ path, line, kind });
 }
 
 for (const path of tracked) {
   const file = basename(path);
-  if ((file === ".env" || file.startsWith(".env.")) && !allowedEnvFiles.has(file)) {
+  if ((file === ".env" || file.startsWith(".env.")) && !isAllowedEnvTemplate(file)) {
     report(path, 1, "tracked environment file");
     continue;
   }
