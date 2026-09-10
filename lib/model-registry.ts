@@ -77,6 +77,9 @@ export function validateVeoSettings(input: {
   if ((resolution === "1080p" || resolution === "4k") && duration !== 8) {
     return `${resolution} generation requires an 8-second duration.`;
   }
+  if (input.hasInitialFrame && !model.supportsImageToVideo) {
+    return `${model.label} does not support image-to-video generation.`;
+  }
   if (input.hasLastFrame && !input.hasInitialFrame) {
     return "A last frame requires an initial frame.";
   }
@@ -90,6 +93,14 @@ export function validateVeoSettings(input: {
   }
   if (referenceImageCount > 0 && duration !== 8) {
     return "Reference-image generation requires an 8-second duration.";
+  }
+
+  // Treat reference-image direction and first/last-frame animation as
+  // distinct paid request modes. Google's public examples document them as
+  // separate workflows, and current provider behavior rejects the mixed form.
+  // Fail before queueing rather than discovering this with a billable request.
+  if (referenceImageCount > 0 && (input.hasInitialFrame || input.hasLastFrame)) {
+    return "Reference-image generation cannot be combined with initial-frame or last-frame inputs.";
   }
 
   return null;
