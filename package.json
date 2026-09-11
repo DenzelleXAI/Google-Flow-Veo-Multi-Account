@@ -23,6 +23,7 @@
     "db:local:bootstrap": "node scripts/db-local-bootstrap.mjs",
     "db:local:check": "node scripts/db-local-check.mjs",
     "companion": "node companion/index.mjs",
+    "companion:bundle": "esbuild companion/index.mjs --bundle --platform=node --format=esm --target=node26 --outfile=dist/companion-sea.mjs",
     "companion:windows:install": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File companion/windows/install.ps1",
     "companion:windows:uninstall": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File companion/windows/uninstall.ps1"
   },
@@ -44,6 +45,7 @@
     "@types/node": "^24.0.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
+    "esbuild": "0.28.2",
     "typescript": "^5.9.0"
   }
 }
