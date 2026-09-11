@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { lstat, mkdir, readFile, realpath, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { readFile, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
+import { join, relative, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 import os from "node:os";
+import { assertSafeParent, resolveMediaRoot, safeTarget } from "./path-safety.mjs";
 
 const companionVersion = "0.4.0";
 const cliArgs = process.argv.slice(2);
@@ -44,8 +45,7 @@ if (!token) {
   process.exit(1);
 }
 
-await mkdir(mediaRoot, { recursive: true });
-const mediaRootReal = await realpath(mediaRoot);
+const mediaRootReal = await resolveMediaRoot(mediaRoot);
 
 async function loadDeviceId() {
   if (configuredDeviceId) return configuredDeviceId;
@@ -96,65 +96,20 @@ async function heartbeat(deviceId) {
   return id;
 }
 
-function isInsideRoot(root, candidate) {
-  const rel = relative(root, candidate);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-}
-
-function safeTarget(relativePath) {
-  const candidate = resolve(mediaRoot, relativePath.split("/").join(sep));
-  if (!isInsideRoot(mediaRoot, candidate)) throw new Error(`Unsafe media path: ${relativePath}`);
-  return candidate;
-}
-
-async function assertSafeParent(target) {
-  const parent = dirname(target);
-  if (!isInsideRoot(mediaRoot, parent)) throw new Error(`Unsafe media parent: ${parent}`);
-
-  // Inspect every already-existing segment before creating anything. On
-  // Windows, directory junctions and symbolic links are surfaced by lstat as
-  // link-like reparse points; realpath containment below is the final guard.
-  const rel = relative(mediaRoot, parent);
-  const segments = rel === "" ? [] : rel.split(sep).filter(Boolean);
-  let current = mediaRoot;
-  for (const segment of segments) {
-    current = join(current, segment);
-    try {
-      const info = await lstat(current);
-      if (info.isSymbolicLink()) {
-        const resolvedLink = await realpath(current);
-        if (!isInsideRoot(mediaRootReal, resolvedLink)) {
-          throw new Error(`Unsafe symlink/junction escapes media root: ${current}`);
-        }
-      } else if (!info.isDirectory()) {
-        throw new Error(`Media path component is not a directory: ${current}`);
-      }
-    } catch (error) {
-      if (error?.code === "ENOENT") break;
-      throw error;
-    }
-  }
-
-  await mkdir(parent, { recursive: true });
-
-  // Re-resolve after mkdir so an existing junction/symlink cannot redirect the
-  // actual write outside the configured canonical media root.
-  const resolvedParent = await realpath(parent);
-  if (!isInsideRoot(mediaRootReal, resolvedParent)) {
-    throw new Error(`Resolved media parent escapes configured root: ${parent}`);
-  }
-}
-
 async function sha256File(path) {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(path)) hash.update(chunk);
   return hash.digest("hex");
 }
 
+async function guardTarget(target) {
+  return assertSafeParent({ mediaRoot, mediaRootReal, target });
+}
+
 async function downloadAndVerify(deviceId, asset) {
-  const target = safeTarget(asset.relativePath);
+  const target = safeTarget(mediaRoot, asset.relativePath);
   const part = `${target}.part`;
-  await assertSafeParent(target);
+  await guardTarget(target);
 
   const existingHash = await sha256File(target).catch(() => null);
   if (existingHash === asset.sha256) {
@@ -177,7 +132,7 @@ async function downloadAndVerify(deviceId, asset) {
 
   // Re-check immediately before the final rename in case the directory tree
   // was modified while the download was in progress.
-  await assertSafeParent(target);
+  await guardTarget(target);
   await rename(part, target);
   const file = await stat(target);
   await confirm(deviceId, asset, target, actualHash, file.size);
