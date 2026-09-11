@@ -7,6 +7,7 @@ on:
     paths:
       - "companion/**"
       - "tests/companion-path-runtime.test.mjs"
+      - "package.json"
       - ".github/workflows/companion-windows.yml"
 
 jobs:
@@ -23,16 +24,27 @@ jobs:
         with:
           node-version: 26
 
+      - name: Install build dependencies
+        run: npm install
+
       - name: Verify path safety on Windows
         shell: pwsh
         run: node --test tests/companion-path-runtime.test.mjs
 
-      - name: Build standalone companion
+      - name: Bundle companion modules
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
+          npm run companion:bundle
+          if (-not (Test-Path ".\dist\companion-sea.mjs")) {
+            throw "Bundled companion SEA entry was not created."
+          }
+
+      - name: Build standalone companion
+        shell: pwsh
+        run: |
           $sea = @{
-            main = "companion/index.mjs"
+            main = "dist/companion-sea.mjs"
             mainFormat = "module"
             output = "dist/PersistentAIVideoStudioCompanion.exe"
             disableExperimentalSEAWarning = $true
@@ -56,6 +68,7 @@ jobs:
       - name: Package Windows companion
         shell: pwsh
         run: |
+          Remove-Item .\dist\companion-sea.mjs -Force
           Copy-Item companion\windows\install-standalone.ps1 dist\install.ps1
           Copy-Item companion\windows\run-standalone.ps1 dist\run-standalone.ps1
           Copy-Item companion\windows\uninstall-standalone.ps1 dist\uninstall-standalone.ps1
@@ -75,6 +88,9 @@ jobs:
             if (-not (Test-Path $file)) {
               throw "Standalone companion package is missing $file"
             }
+          }
+          if (Test-Path ".\dist\companion-sea.mjs") {
+            throw "Build-only bundle should not ship in the companion artifact."
           }
 
       - name: Upload standalone companion artifact
