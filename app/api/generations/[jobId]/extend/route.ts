@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { assertGenerationJobInCurrentWorkspace } from "@/lib/generation-access";
 import {
   createGenerationJob,
   GenerationSafetyError,
@@ -20,6 +21,11 @@ export async function POST(
 ) {
   try {
     const { jobId } = await context.params;
+    const allowed = await assertGenerationJobInCurrentWorkspace(jobId);
+    if (!allowed) {
+      return NextResponse.json({ error: "Parent generation not found" }, { status: 404 });
+    }
+
     const body = await request.json().catch(() => ({}));
     const generationRequestId = typeof body.generationRequestId === "string" ? body.generationRequestId : "";
     const modelId = typeof body.modelId === "string" ? body.modelId : "veo-3.1-generate-preview";
