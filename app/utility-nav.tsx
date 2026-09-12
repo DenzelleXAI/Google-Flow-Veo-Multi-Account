@@ -27,6 +27,7 @@ export default function UtilityNav() {
       <a href="/generations">History</a>
       <a href="/extensions">Extensions</a>
       <a href="/backups">Backups</a>
+      <a href="/monitoring">Monitoring</a>
       <a href="/setup">Setup</a>
       <a href="/profiles">Profiles</a>
       <button type="button" onClick={logout} disabled={loggingOut}>
