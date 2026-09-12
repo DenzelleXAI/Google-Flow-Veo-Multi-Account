@@ -13,6 +13,7 @@ import {
 } from "./generations";
 import { requireDb } from "./db";
 import { classifyProviderSubmissionFailure } from "./provider-error-policy";
+import { getVeoTerminalOperationFailure } from "./provider-operation-result";
 import { claimProviderSubmission, failClosedStaleProviderSubmissions } from "./provider-submit-claim";
 import { resolveGoogleProfile } from "./provider-profiles";
 import { createVeoClient, downloadVeoVideo, pollVeoOperation, submitVeoGeneration } from "./providers/veo";
@@ -422,6 +423,21 @@ export const monitorVeoGeneration = inngest.createFunction(
         await updateGenerationStatus(jobId, "failed_retryable");
       });
       throw new Error("Veo generation polling timed out.");
+    }
+
+    const terminalFailure = getVeoTerminalOperationFailure(operation);
+    if (terminalFailure) {
+      await step.run("mark-provider-terminal-failure", async () => {
+        await updateAttempt({
+          attemptId,
+          status: "failed_final",
+          errorCode: terminalFailure.code,
+          errorMessage: terminalFailure.message,
+          completed: true,
+        });
+        await updateGenerationStatus(jobId, "failed_final");
+      });
+      throw new NonRetriableError(`Veo operation failed after provider acceptance: ${terminalFailure.message}`);
     }
 
     const filename = `${job.id}.mp4`;
