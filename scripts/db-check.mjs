@@ -30,6 +30,7 @@ const requiredTables = [
   "agent_messages",
   "research_sessions",
   "research_sources",
+  "owner_login_rate_limits",
 ];
 
 const requiredColumns = [
