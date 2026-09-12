@@ -78,19 +78,51 @@ export async function getOperationsSnapshot(): Promise<OperationsSnapshot> {
       select
         count(*) filter (
           where created_at >= date_trunc('day', now())
-            and status not in ('cancelled', 'failed_final')
+            and status <> 'cancelled'
+            and (
+              status <> 'failed_final'
+              or exists (
+                select 1 from generation_attempts ga
+                where ga.generation_job_id = generation_jobs.id
+                  and ga.provider_operation_id is not null
+              )
+            )
         )::int as daily_count,
         count(*) filter (
           where created_at >= date_trunc('month', now())
-            and status not in ('cancelled', 'failed_final')
+            and status <> 'cancelled'
+            and (
+              status <> 'failed_final'
+              or exists (
+                select 1 from generation_attempts ga
+                where ga.generation_job_id = generation_jobs.id
+                  and ga.provider_operation_id is not null
+              )
+            )
         )::int as monthly_count,
         coalesce(sum(estimated_cost_usd) filter (
           where created_at >= date_trunc('day', now())
-            and status not in ('cancelled', 'failed_final')
+            and status <> 'cancelled'
+            and (
+              status <> 'failed_final'
+              or exists (
+                select 1 from generation_attempts ga
+                where ga.generation_job_id = generation_jobs.id
+                  and ga.provider_operation_id is not null
+              )
+            )
         ), 0)::numeric as daily_reserved_usd,
         coalesce(sum(estimated_cost_usd) filter (
           where created_at >= date_trunc('month', now())
-            and status not in ('cancelled', 'failed_final')
+            and status <> 'cancelled'
+            and (
+              status <> 'failed_final'
+              or exists (
+                select 1 from generation_attempts ga
+                where ga.generation_job_id = generation_jobs.id
+                  and ga.provider_operation_id is not null
+              )
+            )
         ), 0)::numeric as monthly_reserved_usd
       from generation_jobs
       where workspace_id = ${workspace.id}
@@ -113,20 +145,26 @@ export async function getOperationsSnapshot(): Promise<OperationsSnapshot> {
       order by name asc
     `,
     sql`
-      select distinct on (j.id)
+      select
         j.id as job_id,
         p.name as project_name,
         j.model_id,
         j.status,
-        a.error_code,
-        a.error_message,
+        latest.error_code,
+        latest.error_message,
         j.updated_at
       from generation_jobs j
       join projects p on p.id = j.project_id
-      left join generation_attempts a on a.generation_job_id = j.id
+      left join lateral (
+        select a.error_code, a.error_message
+        from generation_attempts a
+        where a.generation_job_id = j.id
+        order by a.started_at desc
+        limit 1
+      ) latest on true
       where j.workspace_id = ${workspace.id}
         and j.status in ('failed_ambiguous', 'failed_final', 'failed_retryable')
-      order by j.id, a.started_at desc nulls last
+      order by j.updated_at desc
       limit 25
     `,
   ]);
