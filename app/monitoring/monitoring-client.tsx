@@ -204,7 +204,7 @@ export default function MonitoringClient() {
                   <tbody>
                     {snapshot.recentFailures.map((failure) => (
                       <tr key={failure.jobId}>
-                        <td><a href={`/generations/${failure.jobId}`}>{failure.status}</a></td>
+                        <td><a href="/generations">{failure.status}</a></td>
                         <td>{failure.projectName}</td>
                         <td>{failure.modelId}</td>
                         <td title={failure.errorMessage ?? ""}>{failure.errorCode ?? failure.errorMessage ?? "—"}</td>
