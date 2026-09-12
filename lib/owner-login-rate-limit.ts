@@ -7,29 +7,11 @@ export const OWNER_LOGIN_RATE_LIMIT = {
   blockMinutes: 30,
 } as const;
 
-let tableReady = false;
-
-async function ensureTable() {
-  if (tableReady) return;
-  const sql = requireDb();
-  await sql`
-    create table if not exists owner_login_rate_limits (
-      client_key text primary key,
-      window_started_at timestamptz not null default now(),
-      failure_count integer not null default 0,
-      blocked_until timestamptz,
-      updated_at timestamptz not null default now()
-    )
-  `;
-  await sql`
-    create index if not exists idx_owner_login_rate_limits_updated
-    on owner_login_rate_limits(updated_at)
-  `;
-  tableReady = true;
-}
-
 function clientKey(clientAddress: string) {
-  const secret = process.env.APP_SESSION_SECRET ?? "missing-session-secret";
+  const secret = process.env.APP_SESSION_SECRET;
+  if (!secret) {
+    throw new Error("APP_SESSION_SECRET is required for owner login rate limiting.");
+  }
   return createHash("sha256")
     .update("owner-login-rate-limit-v1\0")
     .update(secret)
@@ -44,7 +26,6 @@ export type OwnerLoginRateLimitResult = {
 };
 
 export async function checkOwnerLoginRateLimit(clientAddress: string): Promise<OwnerLoginRateLimitResult> {
-  await ensureTable();
   const sql = requireDb();
   const key = clientKey(clientAddress);
 
@@ -83,7 +64,6 @@ export async function checkOwnerLoginRateLimit(clientAddress: string): Promise<O
 }
 
 export async function recordOwnerLoginFailure(clientAddress: string): Promise<OwnerLoginRateLimitResult> {
-  await ensureTable();
   const sql = requireDb();
   const key = clientKey(clientAddress);
 
@@ -147,7 +127,6 @@ export async function recordOwnerLoginFailure(clientAddress: string): Promise<Ow
 }
 
 export async function clearOwnerLoginFailures(clientAddress: string) {
-  await ensureTable();
   const sql = requireDb();
   const key = clientKey(clientAddress);
   await sql`delete from owner_login_rate_limits where client_key = ${key}`;
