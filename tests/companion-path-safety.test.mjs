@@ -2,19 +2,21 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-test("companion rejects lexical paths outside media root", async () => {
-  const source = await readFile(new URL("../companion/index.mjs", import.meta.url), "utf8");
-  assert.match(source, /function safeTarget\(relativePath\)/);
-  assert.match(source, /isInsideRoot\(mediaRoot, candidate\)/);
+const indexSource = await readFile(new URL("../companion/index.mjs", import.meta.url), "utf8");
+const guardSource = await readFile(new URL("../companion/path-safety.mjs", import.meta.url), "utf8");
+
+test("companion rejects lexical paths outside media root", () => {
+  assert.match(guardSource, /export function safeTarget\(mediaRoot, relativePath\)/);
+  assert.match(guardSource, /isInsideRoot\(mediaRoot, candidate\)/);
+  assert.match(indexSource, /safeTarget\(mediaRoot, asset\.relativePath\)/);
 });
 
-test("companion resolves existing link-like path components before writes", async () => {
-  const source = await readFile(new URL("../companion/index.mjs", import.meta.url), "utf8");
-  const guardStart = source.indexOf("async function assertSafeParent(target)");
-  const lstatIndex = source.indexOf("await lstat(current)", guardStart);
-  const realpathIndex = source.indexOf("await realpath(current)", guardStart);
-  const mkdirIndex = source.indexOf("await mkdir(parent, { recursive: true })", guardStart);
-  const resolvedParentIndex = source.indexOf("await realpath(parent)", guardStart);
+test("companion resolves existing link-like path components before writes", () => {
+  const guardStart = guardSource.indexOf("export async function assertSafeParent");
+  const lstatIndex = guardSource.indexOf("await lstat(current)", guardStart);
+  const realpathIndex = guardSource.indexOf("await realpath(current)", guardStart);
+  const mkdirIndex = guardSource.indexOf("await mkdir(parent, { recursive: true })", guardStart);
+  const resolvedParentIndex = guardSource.indexOf("await realpath(parent)", guardStart);
 
   assert.ok(guardStart >= 0, "assertSafeParent must exist");
   assert.ok(lstatIndex > guardStart, "existing path components must be lstat'ed");
@@ -23,15 +25,15 @@ test("companion resolves existing link-like path components before writes", asyn
   assert.ok(resolvedParentIndex > mkdirIndex, "resolved parent must be rechecked after mkdir");
 });
 
-test("companion rechecks parent immediately before atomic rename", async () => {
-  const source = await readFile(new URL("../companion/index.mjs", import.meta.url), "utf8");
-  const downloadStart = source.indexOf("async function downloadAndVerify");
-  const writeIndex = source.indexOf("createWriteStream(part)", downloadStart);
-  const secondGuardIndex = source.indexOf("await assertSafeParent(target)", writeIndex);
-  const renameIndex = source.indexOf("await rename(part, target)", secondGuardIndex);
+test("companion rechecks parent immediately before atomic rename", () => {
+  const downloadStart = indexSource.indexOf("async function downloadAndVerify");
+  const writeIndex = indexSource.indexOf("createWriteStream(part)", downloadStart);
+  const firstGuardIndex = indexSource.indexOf("await guardTarget(target)", downloadStart);
+  const secondGuardIndex = indexSource.indexOf("await guardTarget(target)", writeIndex);
+  const renameIndex = indexSource.indexOf("await rename(part, target)", secondGuardIndex);
 
   assert.ok(downloadStart >= 0);
-  assert.ok(writeIndex > downloadStart, "download must write only to the guarded target tree");
+  assert.ok(firstGuardIndex > downloadStart && firstGuardIndex < writeIndex, "guard must run before .part write");
   assert.ok(secondGuardIndex > writeIndex, "parent must be rechecked after download");
   assert.ok(renameIndex > secondGuardIndex, "final rename must occur only after the second guard");
 });
