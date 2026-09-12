@@ -353,19 +353,51 @@ export async function createGenerationJob(input: {
       select
         count(*) filter (
           where created_at >= date_trunc('day', now())
-            and status not in ('cancelled', 'failed_final')
+            and status <> 'cancelled'
+            and (
+              status <> 'failed_final'
+              or exists (
+                select 1 from generation_attempts ga
+                where ga.generation_job_id = generation_jobs.id
+                  and ga.provider_operation_id is not null
+              )
+            )
         )::int as daily_count,
         count(*) filter (
           where created_at >= date_trunc('month', now())
-            and status not in ('cancelled', 'failed_final')
+            and status <> 'cancelled'
+            and (
+              status <> 'failed_final'
+              or exists (
+                select 1 from generation_attempts ga
+                where ga.generation_job_id = generation_jobs.id
+                  and ga.provider_operation_id is not null
+              )
+            )
         )::int as monthly_count,
         coalesce(sum(estimated_cost_usd) filter (
           where created_at >= date_trunc('day', now())
-            and status not in ('cancelled', 'failed_final')
+            and status <> 'cancelled'
+            and (
+              status <> 'failed_final'
+              or exists (
+                select 1 from generation_attempts ga
+                where ga.generation_job_id = generation_jobs.id
+                  and ga.provider_operation_id is not null
+              )
+            )
         ), 0)::numeric as daily_reserved_usd,
         coalesce(sum(estimated_cost_usd) filter (
           where created_at >= date_trunc('month', now())
-            and status not in ('cancelled', 'failed_final')
+            and status <> 'cancelled'
+            and (
+              status <> 'failed_final'
+              or exists (
+                select 1 from generation_attempts ga
+                where ga.generation_job_id = generation_jobs.id
+                  and ga.provider_operation_id is not null
+              )
+            )
         ), 0)::numeric as monthly_reserved_usd
       from generation_jobs
       where workspace_id = ${workspace.id}
@@ -619,13 +651,27 @@ export async function saveRelayOutput(input: {
 }) {
   const sql = requireDb();
   return sql.begin(async (tx) => {
+    // Serialize output persistence per logical generation. If an Inngest step
+    // is replayed after the first transaction committed, return the existing
+    // output instead of inserting a second generated asset.
     const jobs = await tx`
       select expected_output_duration_seconds
       from generation_jobs
       where id = ${input.jobId} and project_id = ${input.projectId}
       limit 1
+      for update
     `;
     if (!jobs[0]) throw new Error("Generation job not found while saving relay output.");
+
+    const existing = await tx`
+      select a.*
+      from generation_outputs go
+      join assets a on a.id = go.asset_id
+      where go.generation_job_id = ${input.jobId}
+      order by go.created_at asc
+      limit 1
+    `;
+    if (existing[0]) return existing[0];
 
     const assets = await tx`
       insert into assets (
@@ -639,7 +685,6 @@ export async function saveRelayOutput(input: {
     await tx`
       insert into generation_outputs (generation_job_id, asset_id)
       values (${input.jobId}, ${assets[0].id})
-      on conflict do nothing
     `;
     return assets[0];
   });
