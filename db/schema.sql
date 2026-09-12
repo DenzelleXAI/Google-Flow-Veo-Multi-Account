@@ -144,6 +144,14 @@ alter table workspace_settings alter column min_free_disk_bytes set not null;
 alter table workspace_settings alter column device_stale_after_seconds set default 300;
 alter table workspace_settings alter column device_stale_after_seconds set not null;
 
+create table if not exists owner_login_rate_limits (
+  client_key text primary key,
+  window_started_at timestamptz not null default now(),
+  failure_count integer not null default 0,
+  blocked_until timestamptz,
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists agent_threads (
   id uuid primary key default gen_random_uuid(),
   project_id uuid not null references projects(id) on delete cascade,
@@ -270,6 +278,7 @@ create index if not exists idx_projects_workspace on projects(workspace_id);
 create index if not exists idx_scenes_project on scenes(project_id);
 create index if not exists idx_assets_project on assets(project_id);
 create index if not exists idx_assets_relay_cleanup on assets(type, relay_delete_after) where relay_deleted_at is null;
+create index if not exists idx_owner_login_rate_limits_updated on owner_login_rate_limits(updated_at);
 create index if not exists idx_agent_messages_thread on agent_messages(thread_id, created_at);
 create index if not exists idx_research_sessions_project on research_sessions(project_id, created_at desc);
 create index if not exists idx_research_sources_session on research_sources(research_session_id);
