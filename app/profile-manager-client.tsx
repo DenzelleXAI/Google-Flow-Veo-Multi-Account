@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import styles from "./profile-manager-client.module.css";
 
 type ApiProfile = {
   id: string;
@@ -15,6 +16,9 @@ export default function ProfileManagerClient() {
   const [defaultProfileId, setDefaultProfileId] = useState<string | null>(null);
   const [state, setState] = useState<"loading" | "idle" | "saving" | "error">("loading");
   const [message, setMessage] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
+  const [newProfileName, setNewProfileName] = useState("");
+  const [newApiKey, setNewApiKey] = useState("");
 
   const defaultProfile = useMemo(
     () => profiles.find((profile) => profile.id === defaultProfileId) ?? null,
@@ -40,11 +44,25 @@ export default function ProfileManagerClient() {
     void refresh();
   }, []);
 
-  async function addProfile() {
-    const name = window.prompt("Profile name", `Google Profile ${profiles.length + 1}`);
-    if (!name?.trim()) return;
-    const apiKey = window.prompt("Google API/Auth key. It will be encrypted server-side and never returned to the browser.");
-    if (!apiKey?.trim()) return;
+  function openAddProfile() {
+    setNewProfileName(`Google Profile ${profiles.length + 1}`);
+    setNewApiKey("");
+    setMessage("");
+    setAddOpen(true);
+  }
+
+  function closeAddProfile() {
+    if (state === "saving") return;
+    setNewApiKey("");
+    setNewProfileName("");
+    setAddOpen(false);
+  }
+
+  async function addProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const name = newProfileName.trim();
+    const apiKey = newApiKey.trim();
+    if (!name || !apiKey) return;
 
     setState("saving");
     setMessage("");
@@ -52,13 +70,20 @@ export default function ProfileManagerClient() {
       const response = await fetch("/api/profiles", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), apiKey: apiKey.trim() }),
+        body: JSON.stringify({ name, apiKey }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Failed to add profile");
+
+      // Never retain the credential in browser state after the request has
+      // completed. The server stores only the encrypted credential.
+      setNewApiKey("");
+      setNewProfileName("");
+      setAddOpen(false);
       setMessage(`Added ${data.profile.name}.`);
       await refresh();
     } catch (error) {
+      setNewApiKey("");
       setMessage(error instanceof Error ? error.message : "Failed to add profile");
       setState("error");
     }
@@ -133,7 +158,7 @@ export default function ProfileManagerClient() {
           </div>
           <div className="settings-actions">
             <a className="ghost-button settings-link" href="/">← Workspace</a>
-            <button className="profile-button" onClick={() => void addProfile()} disabled={state === "saving"}>＋ Add profile</button>
+            <button className="profile-button" onClick={openAddProfile} disabled={state === "saving"}>＋ Add profile</button>
           </div>
         </div>
 
@@ -167,6 +192,58 @@ export default function ProfileManagerClient() {
           {state === "loading" ? <div className="profile-empty">Loading profiles…</div> : null}
         </div>
       </section>
+
+      {addOpen ? (
+        <div className={styles.backdrop} role="presentation" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) closeAddProfile();
+        }}>
+          <section className={styles.modal} role="dialog" aria-modal="true" aria-labelledby="add-profile-title">
+            <div className={styles.modalHeader}>
+              <div>
+                <span className="eyebrow">Encrypted credential</span>
+                <h2 id="add-profile-title">Add Google API profile</h2>
+                <p>The API key is sent directly to the server for encryption and is never returned by profile APIs.</p>
+              </div>
+              <button className={styles.closeButton} type="button" onClick={closeAddProfile} disabled={state === "saving"} aria-label="Close">×</button>
+            </div>
+
+            <form className={styles.form} onSubmit={(event) => void addProfile(event)}>
+              <label className={styles.field}>
+                <span>Profile name</span>
+                <input
+                  value={newProfileName}
+                  onChange={(event) => setNewProfileName(event.target.value)}
+                  autoComplete="off"
+                  maxLength={120}
+                  required
+                  autoFocus
+                />
+              </label>
+
+              <label className={styles.field}>
+                <span>Google API/Auth key</span>
+                <input
+                  type="password"
+                  value={newApiKey}
+                  onChange={(event) => setNewApiKey(event.target.value)}
+                  autoComplete="new-password"
+                  spellCheck={false}
+                  required
+                />
+              </label>
+
+              <p className={styles.helper}>The key is kept only for this request in browser memory, then the field is cleared on success, failure, or close.</p>
+
+              <div className={styles.actions}>
+                <button className={styles.secondary} type="button" onClick={closeAddProfile} disabled={state === "saving"}>Cancel</button>
+                <button className={styles.primary} type="submit" disabled={state === "saving" || !newProfileName.trim() || !newApiKey.trim()}>
+                  {state === "saving" ? "Encrypting…" : "Add encrypted profile"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }
