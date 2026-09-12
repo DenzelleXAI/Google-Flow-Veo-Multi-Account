@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { requireDb } from "./db";
+import { requireDb } from "./db.ts";
 
 export const OWNER_LOGIN_RATE_LIMIT = {
   maxFailures: 8,
