@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { dbConfigured } from "@/lib/db";
+import { assertGenerationJobInCurrentWorkspace } from "@/lib/generation-access";
 import { getGenerationJob } from "@/lib/generations";
 
 export async function GET(
@@ -12,6 +13,11 @@ export async function GET(
 
   try {
     const { jobId } = await context.params;
+    const allowed = await assertGenerationJobInCurrentWorkspace(jobId);
+    if (!allowed) {
+      return NextResponse.json({ error: "Generation job not found" }, { status: 404 });
+    }
+
     const job = await getGenerationJob(jobId);
     if (!job) {
       return NextResponse.json({ error: "Generation job not found" }, { status: 404 });
