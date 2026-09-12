@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { getAgentMutationAuthorization } from "../lib/project-agent.ts";
+import { getAgentMutationAuthorization } from "../lib/agent-mutation-authorization.ts";
 
 test("project agent exposes only bounded reversible tools", async () => {
   const source = await readFile(new URL("../lib/project-agent.ts", import.meta.url), "utf8");
@@ -51,23 +51,17 @@ test("latest human message alone authorizes reversible project mutations", () =>
   );
 
   assert.deepEqual(
-    getAgentMutationAuthorization([
-      { role: "user", content: "Create a new scene for the sunrise sequence." },
-    ]),
+    getAgentMutationAuthorization([{ role: "user", content: "Create a new scene for the sunrise sequence." }]),
     { createScene: true, savePrompt: false },
   );
 
   assert.deepEqual(
-    getAgentMutationAuthorization([
-      { role: "user", content: "Please rewrite the prompt for the opening shot." },
-    ]),
+    getAgentMutationAuthorization([{ role: "user", content: "Please rewrite the prompt for the opening shot." }]),
     { createScene: false, savePrompt: true },
   );
 
   assert.deepEqual(
-    getAgentMutationAuthorization([
-      { role: "user", content: "Gumawa ng bagong eksena para sa ending." },
-    ]),
+    getAgentMutationAuthorization([{ role: "user", content: "Gumawa ng bagong eksena para sa ending." }]),
     { createScene: true, savePrompt: false },
   );
 });
