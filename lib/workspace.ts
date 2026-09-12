@@ -49,12 +49,14 @@ export async function createProject(name: string, description?: string | null) {
 
 export async function listScenes(projectId: string) {
   const sql = requireDb();
+  const workspace = await ensurePersonalWorkspace();
 
   return sql`
     select s.id, s.project_id, s.title, s.description, s.aspect_ratio,
       s.duration_seconds, s.resolution, s.created_at, s.updated_at,
       pv.id as prompt_version_id, pv.version as prompt_version, pv.content as prompt
     from scenes s
+    join projects p on p.id = s.project_id
     left join lateral (
       select id, version, content
       from scene_prompt_versions
@@ -63,26 +65,44 @@ export async function listScenes(projectId: string) {
       limit 1
     ) pv on true
     where s.project_id = ${projectId}
+      and p.workspace_id = ${workspace.id}
     order by s.created_at asc
   `;
 }
 
 export async function createScene(projectId: string, title: string) {
   const sql = requireDb();
+  const workspace = await ensurePersonalWorkspace();
 
   const rows = await sql`
     insert into scenes (project_id, title)
-    values (${projectId}, ${title})
+    select p.id, ${title}
+    from projects p
+    where p.id = ${projectId}
+      and p.workspace_id = ${workspace.id}
     returning *
   `;
 
+  if (!rows[0]) throw new Error("Project not found in current workspace.");
   return rows[0];
 }
 
 export async function savePromptVersion(sceneId: string, content: string, createdBy = "user") {
   const sql = requireDb();
+  const workspace = await ensurePersonalWorkspace();
 
   return sql.begin(async (tx) => {
+    const scenes = await tx`
+      select s.id
+      from scenes s
+      join projects p on p.id = s.project_id
+      where s.id = ${sceneId}
+        and p.workspace_id = ${workspace.id}
+      limit 1
+      for update of s
+    `;
+    if (!scenes[0]) throw new Error("Scene not found in current workspace.");
+
     const versions = await tx`
       select coalesce(max(version), 0)::int as current_version
       from scene_prompt_versions
