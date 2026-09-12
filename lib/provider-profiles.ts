@@ -166,15 +166,39 @@ async function loadProfile(profileId: string) {
   return rows[0] ?? null;
 }
 
+async function loadEnabledFallbackProfile() {
+  const sql = requireDb();
+  const workspace = await ensurePersonalWorkspace();
+  const rows = await sql`
+    select *
+    from api_profiles
+    where workspace_id = ${workspace.id}
+      and provider = 'google'
+      and enabled = true
+    order by credential_source = 'environment' desc, created_at asc
+    limit 1
+  `;
+  return rows[0] ?? null;
+}
+
 export async function resolveGoogleProfile(requestedProfileId?: string | null) {
   let profile: any = null;
 
   if (requestedProfileId) {
+    // Explicit/manual selection is strict: never silently switch to another
+    // profile when the requested one is disabled or missing.
     profile = await loadProfile(requestedProfileId);
   } else {
     const defaultId = await getDefaultGoogleProfileId();
     if (defaultId) profile = await loadProfile(defaultId);
-    if (!profile) profile = await ensureEnvironmentGoogleProfile();
+
+    // Ensure the environment profile record exists for first-run installs,
+    // then select an actually enabled profile. A previously disabled
+    // environment profile must never be resurrected by fallback resolution.
+    if (!profile) {
+      await ensureEnvironmentGoogleProfile();
+      profile = await loadEnabledFallbackProfile();
+    }
   }
 
   if (!profile) throw new Error("No enabled Google API profile is available.");
