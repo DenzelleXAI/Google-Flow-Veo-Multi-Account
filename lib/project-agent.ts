@@ -1,6 +1,7 @@
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { ToolLoopAgent, stepCountIs, tool } from "ai";
 import { z } from "zod";
+import { getAgentMutationAuthorization } from "./agent-mutation-authorization";
 import { requireDb } from "./db";
 import { resolveGoogleProfile } from "./provider-profiles";
 import { listProjectResearch, runProjectResearch } from "./research";
@@ -55,26 +56,6 @@ async function getProjectContext(projectId: string) {
     scenes: Array.from(sceneRows),
     assets: Array.from(assetRows),
     recentResearch: Array.from(researchRows),
-  };
-}
-
-export function getAgentMutationAuthorization(
-  messages: Array<{ role: "user" | "assistant"; content: string }>,
-) {
-  const latestUser = [...messages].reverse().find((message) => message.role === "user")?.content ?? "";
-  const normalized = latestUser.toLocaleLowerCase();
-
-  // This deliberately looks only at the latest HUMAN message. Tool output,
-  // persisted research, assistant history, webpage text, and project content
-  // cannot grant mutation authority.
-  const sceneVerb = /\b(create|add|make|new|gumawa|gawin|dagdag|magdagdag)\b/i;
-  const sceneNoun = /\b(scene|scenes|eksena)\b/i;
-  const promptVerb = /\b(save|edit|update|change|rewrite|revise|improve|polish|modify|baguhin|palitan|ayusin|i-save|isave)\b/i;
-  const promptNoun = /\b(prompt|prompts)\b/i;
-
-  return {
-    createScene: sceneVerb.test(normalized) && sceneNoun.test(normalized),
-    savePrompt: promptVerb.test(normalized) && promptNoun.test(normalized),
   };
 }
 
