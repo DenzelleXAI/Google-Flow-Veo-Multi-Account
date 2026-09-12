@@ -1,4 +1,4 @@
-import { requireDb } from "./db";
+import { requireDb } from "./db.ts";
 
 export type ProviderSubmissionClaim = {
   claimed: boolean;
