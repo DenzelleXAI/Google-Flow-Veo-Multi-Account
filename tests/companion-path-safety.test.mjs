@@ -1,14 +1,62 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, symlink } from "node:fs/promises";
+import os from "node:os";
+import { join } from "node:path";
+import {
+  assertSafeParent,
+  resolveMediaRoot,
+  safeTarget,
+} from "../companion/path-safety.mjs";
 
 const indexSource = await readFile(new URL("../companion/index.mjs", import.meta.url), "utf8");
 const guardSource = await readFile(new URL("../companion/path-safety.mjs", import.meta.url), "utf8");
 
-test("companion rejects lexical paths outside media root", () => {
-  assert.match(guardSource, /export function safeTarget\(mediaRoot, relativePath\)/);
-  assert.match(guardSource, /isInsideRoot\(mediaRoot, candidate\)/);
-  assert.match(indexSource, /safeTarget\(mediaRoot, asset\.relativePath\)/);
+test("companion rejects lexical paths outside media root", async () => {
+  const base = await mkdtemp(join(os.tmpdir(), "pavs-path-lexical-"));
+  const mediaRoot = join(base, "media");
+  try {
+    await mkdir(mediaRoot, { recursive: true });
+    assert.throws(
+      () => safeTarget(mediaRoot, "../outside/video.mp4"),
+      /Unsafe media path/,
+    );
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("companion rejects a real symlink or Windows junction escaping media root", async () => {
+  const base = await mkdtemp(join(os.tmpdir(), "pavs-path-link-"));
+  const mediaRoot = join(base, "media");
+  const outsideRoot = join(base, "outside");
+  const escapeLink = join(mediaRoot, "escape");
+
+  try {
+    await mkdir(mediaRoot, { recursive: true });
+    await mkdir(outsideRoot, { recursive: true });
+    const mediaRootReal = await resolveMediaRoot(mediaRoot);
+
+    // `junction` avoids Windows developer-mode/admin requirements. On POSIX,
+    // a directory symlink exercises the same realpath containment boundary.
+    await symlink(
+      outsideRoot,
+      escapeLink,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    const target = safeTarget(mediaRoot, "escape/nested/video.mp4");
+    await assert.rejects(
+      assertSafeParent({ mediaRoot, mediaRootReal, target }),
+      /escapes media root|escapes configured root/,
+    );
+
+    // The guard must fail before recursive mkdir can create anything through
+    // the escaping link/junction.
+    await assert.rejects(stat(join(outsideRoot, "nested")), (error) => error?.code === "ENOENT");
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
 });
 
 test("companion resolves existing link-like path components before writes", () => {
