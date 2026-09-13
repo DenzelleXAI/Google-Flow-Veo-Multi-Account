@@ -55,6 +55,7 @@ export async function POST(request: Request) {
     const aspectRatioSnapshot = typeof body.aspectRatioSnapshot === "string" ? body.aspectRatioSnapshot : "9:16";
     const durationSecondsSnapshot = Number.isInteger(body.durationSecondsSnapshot) ? body.durationSecondsSnapshot : 8;
     const resolutionSnapshot = typeof body.resolutionSnapshot === "string" ? body.resolutionSnapshot : "720p";
+    const hasPrompt = body.promptSnapshot.trim().length > 0;
 
     const assetInputs: GenerationAssetInput[] = [];
     if (Array.isArray(body.assetInputs)) {
@@ -82,6 +83,7 @@ export async function POST(request: Request) {
       aspectRatio: aspectRatioSnapshot,
       durationSeconds: durationSecondsSnapshot,
       resolution: resolutionSnapshot,
+      hasPrompt,
       hasInitialFrame: initialCount === 1,
       hasLastFrame: lastCount === 1,
       referenceImageCount: referenceCount,
