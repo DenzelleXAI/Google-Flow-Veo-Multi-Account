@@ -41,6 +41,7 @@ export function validateVeoSettings(input: {
   resolution?: string | null;
   durationSeconds?: number | null;
   aspectRatio?: string | null;
+  hasPrompt?: boolean;
   hasInitialFrame?: boolean;
   hasLastFrame?: boolean;
   referenceImageCount?: number;
@@ -53,6 +54,10 @@ export function validateVeoSettings(input: {
   const aspect = input.aspectRatio ?? "16:9";
   const referenceImageCount = input.referenceImageCount ?? 0;
   const isExtension = Boolean(input.isExtension);
+  // Existing internal callers that only validate model settings are assumed to
+  // have a prompt unless they explicitly provide hasPrompt=false. Paid HTTP
+  // routes pass the real trimmed-prompt state.
+  const hasPrompt = input.hasPrompt ?? true;
 
   if (!(model.resolutions as readonly string[]).includes(resolution)) {
     return `${model.label} does not support ${resolution}.`;
@@ -71,6 +76,8 @@ export function validateVeoSettings(input: {
     if (input.hasInitialFrame || input.hasLastFrame || referenceImageCount > 0) {
       return "Video extension cannot be combined with image, last-frame, or reference-image inputs.";
     }
+    // Google documents the extension prompt as optional, so a blank prompt is
+    // valid when the frozen Veo source video is present.
     return null;
   }
 
@@ -91,6 +98,9 @@ export function validateVeoSettings(input: {
       ? `${model.label} supports at most ${model.maxReferenceImages} reference images.`
       : `${model.label} does not support reference images.`;
   }
+  if (referenceImageCount > 0 && !hasPrompt) {
+    return "Reference-image generation requires a non-empty prompt.";
+  }
   if (referenceImageCount > 0 && duration !== 8) {
     return "Reference-image generation requires an 8-second duration.";
   }
@@ -101,6 +111,13 @@ export function validateVeoSettings(input: {
   // Fail before queueing rather than discovering this with a billable request.
   if (referenceImageCount > 0 && (input.hasInitialFrame || input.hasLastFrame)) {
     return "Reference-image generation cannot be combined with initial-frame or last-frame inputs.";
+  }
+
+  // Text-to-video requires a prompt. Image-to-video/interpolation may rely on
+  // the initial image without text, so only reject the no-prompt case when no
+  // valid visual source exists either.
+  if (!hasPrompt && !input.hasInitialFrame && referenceImageCount === 0) {
+    return "Text-to-video generation requires a non-empty prompt.";
   }
 
   return null;
