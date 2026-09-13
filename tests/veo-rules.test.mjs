@@ -98,6 +98,33 @@ test("720p supports 4, 6, and 8 second generations", () => {
   }
 });
 
+test("blank text-only generation is rejected before queueing", () => {
+  assert.match(
+    validateVeoSettings({
+      modelId: "veo-3.1-generate-preview",
+      resolution: "720p",
+      durationSeconds: 8,
+      aspectRatio: "9:16",
+      hasPrompt: false,
+    }) ?? "",
+    /text-to-video generation requires a non-empty prompt/i,
+  );
+});
+
+test("image-to-video may use an initial frame without text", () => {
+  assert.equal(
+    validateVeoSettings({
+      modelId: "veo-3.1-generate-preview",
+      resolution: "720p",
+      durationSeconds: 8,
+      aspectRatio: "9:16",
+      hasPrompt: false,
+      hasInitialFrame: true,
+    }),
+    null,
+  );
+});
+
 test("last frame requires an initial frame", () => {
   assert.match(
     validateVeoSettings({
@@ -149,6 +176,20 @@ test("Standard and Fast accept at most three reference images", () => {
       /at most 3 reference images/i,
     );
   }
+});
+
+test("reference images require a non-empty text prompt", () => {
+  assert.match(
+    validateVeoSettings({
+      modelId: "veo-3.1-generate-preview",
+      resolution: "720p",
+      durationSeconds: 8,
+      aspectRatio: "9:16",
+      hasPrompt: false,
+      referenceImageCount: 1,
+    }) ?? "",
+    /reference-image generation requires a non-empty prompt/i,
+  );
 });
 
 test("Lite rejects reference images", () => {
@@ -214,6 +255,7 @@ test("Standard and Fast support 720p 8-second extension requests", () => {
         resolution: "720p",
         durationSeconds: 8,
         aspectRatio: "9:16",
+        hasPrompt: false,
         isExtension: true,
       }),
       null,
